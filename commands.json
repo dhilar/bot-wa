@@ -1,0 +1,33 @@
+{
+  "main": [
+    "-menu",
+    "-ping",
+    "-runtime",
+    "-owner"
+  ],
+  "produk": [
+    "-list show",
+    "-list kategori AI",
+    "-list kategori Streaming"
+  ],
+  "order": [
+    "-order nama,idproduk,qty,alamat",
+    "-myorder",
+    "-cekorder ID"
+  ],
+  "owner": [
+    "-list add Nama|Harga|Kategori|Status",
+    "-list remove ID",
+    "-done ID",
+    "-fail ID",
+    "-refund ID",
+    "-stats",
+    "-clearcache",
+    "-restart"
+  ],
+  "group": [
+    "-open",
+    "-close",
+    "-kick (reply target)"
+  ]
+}

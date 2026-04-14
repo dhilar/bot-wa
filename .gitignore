@@ -16,3 +16,7 @@ db.json
 # OS junk
 .DS_Store
 Thumbs.db
+
+#npm debug log
+npm-debug.log*
+
