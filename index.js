@@ -28,7 +28,7 @@ function log(...args) {
   if (config.debug) console.log("[BOT LOG]", ...args)
 }
 
-function reply(sock, jid, text, quoted) {
+function reply(sock, jid, text, quoted = null) {
   return sock.sendMessage(
     jid,
     { text },
@@ -37,37 +37,37 @@ function reply(sock, jid, text, quoted) {
 }
 
 function makeMenu(pushName = "User") {
-  const main = commandsTemplate.main.map(x => `│ • ${x}`).join("\n")
-  const produk = commandsTemplate.produk.map(x => `│ • ${x}`).join("\n")
-  const order = commandsTemplate.order.map(x => `│ • ${x}`).join("\n")
-  const owner = commandsTemplate.owner.map(x => `│ • ${x}`).join("\n")
-  const group = commandsTemplate.group.map(x => `│ • ${x}`).join("\n")
+  const main = (commandsTemplate.main || []).map(x => `│ • ${x}`).join("\n")
+  const produk = (commandsTemplate.produk || []).map(x => `│ • ${x}`).join("\n")
+  const order = (commandsTemplate.order || []).map(x => `│ • ${x}`).join("\n")
+  const owner = (commandsTemplate.owner || []).map(x => `│ • ${x}`).join("\n")
+  const group = (commandsTemplate.group || []).map(x => `│ • ${x}`).join("\n")
 
   return `
 ╭─❖「 ${config.botName} 」
 │ Halo, ${pushName}
 │ Prefix: ${config.prefix}
-│ Mode: ${os.platform()}
+│ Platform: ${os.platform()}
 ╰─────────────
 
 ╭─❖ MAIN
-${main}
+${main || "│ • belum ada"}
 ╰─────────────
 
 ╭─❖ PRODUK
-${produk}
+${produk || "│ • belum ada"}
 ╰─────────────
 
 ╭─❖ ORDER
-${order}
+${order || "│ • belum ada"}
 ╰─────────────
 
 ╭─❖ OWNER
-${owner}
+${owner || "│ • belum ada"}
 ╰─────────────
 
 ╭─❖ GROUP
-${group}
+${group || "│ • belum ada"}
 ╰─────────────
 `.trim()
 }
@@ -83,6 +83,7 @@ function getQuotedParticipant(m) {
 function updateOrderStatus(db, id, status) {
   const order = db.orders.find(o => o.id === id)
   if (!order) return false
+
   order.status = status
   order.updatedAt = new Date().toISOString()
   return true
@@ -147,9 +148,6 @@ async function startBot() {
       const from = m.key.remoteJid
       const senderJid = m.key.participant || from
       const senderNumber = normalizeJidToNumber(senderJid)
-        console.log("SENDER:", senderJid)
-        console.log("SENDER NUMBER:", senderNumber)
-        console.log("OWNER LIST:", config.ownerNumbers)
       const pushName = m.pushName || "User"
       const isGroup = from.endsWith("@g.us")
 
@@ -160,6 +158,10 @@ async function startBot() {
 
       log("RAW:", rawText)
       log("TEXT:", text)
+      log("SENDER:", senderJid)
+      log("SENDER NUMBER:", senderNumber)
+      log("OWNER NUMBERS:", config.ownerNumbers)
+      log("OWNER JIDS:", config.ownerJids)
 
       const body = text.slice(config.prefix.length).trim()
       const parts = body.split(/\s+/)
@@ -179,6 +181,10 @@ async function startBot() {
         config.ownerNumbers,
         config.ownerJids
       )
+
+      log("IS OWNER:", owner)
+
+      let db = loadDB(config.dbFile)
 
       if (cmd === "menu") {
         return reply(sock, from, makeMenu(pushName), m)
@@ -289,7 +295,7 @@ async function startBot() {
           }
 
           const hasil = db.list.filter(item =>
-            item.kategori.toLowerCase() === kategori
+            String(item.kategori).toLowerCase() === kategori
           )
 
           if (!hasil.length) {
@@ -316,11 +322,13 @@ async function startBot() {
           const [nama, hargaRaw, kategori, status] = data.map(x => x.trim())
           const harga = Number(hargaRaw)
 
-          if (Number.isNaN(harga)) {
-            return reply(sock, from, "❌ Harga harus angka", m)
+          if (!nama || Number.isNaN(harga) || !kategori || !status) {
+            return reply(sock, from, "❌ Data produk tidak valid", m)
           }
 
-          const newId = db.list.length ? Math.max(...db.list.map(x => x.id)) + 1 : 1
+          const newId = db.list.length
+            ? Math.max(...db.list.map(x => Number(x.id) || 0)) + 1
+            : 1
 
           db.list.push({
             id: newId,
@@ -335,7 +343,13 @@ async function startBot() {
           return reply(
             sock,
             from,
-            `✅ Produk ditambahkan\n\n🆔 ${newId}\n📦 ${nama}\n💰 ${harga}\n🗂 ${kategori}\n📌 ${status}`,
+            `✅ Produk ditambahkan
+
+🆔 ${newId}
+📦 ${nama}
+💰 ${harga}
+🗂 ${kategori}
+📌 ${status}`,
             m
           )
         }
@@ -350,7 +364,7 @@ async function startBot() {
           }
 
           const before = db.list.length
-          db.list = db.list.filter(item => item.id !== id)
+          db.list = db.list.filter(item => Number(item.id) !== id)
 
           if (db.list.length === before) {
             return reply(sock, from, "❌ Produk tidak ditemukan", m)
@@ -373,18 +387,23 @@ async function startBot() {
         const data = raw.split(",")
 
         if (data.length < 4) {
-          return reply(sock, from, "❌ Format: -order nama,idproduk,qty,alamat\nContoh: -order Bagas,2,1,-", m)
+          return reply(
+            sock,
+            from,
+            "❌ Format: -order nama,idproduk,qty,alamat\nContoh: -order Bagas,2,1,-",
+            m
+          )
         }
 
         const [nama, produkIdRaw, qtyRaw, alamat] = data.map(x => x.trim())
         const produkId = Number(produkIdRaw)
         const qty = Number(qtyRaw)
 
-        if (Number.isNaN(produkId) || Number.isNaN(qty)) {
+        if (!nama || Number.isNaN(produkId) || Number.isNaN(qty)) {
           return reply(sock, from, "❌ ID produk dan qty harus angka", m)
         }
 
-        const product = db.list.find(item => item.id === produkId)
+        const product = db.list.find(item => Number(item.id) === produkId)
 
         if (!product) {
           return reply(sock, from, "❌ Produk tidak ditemukan. Ketik -list show", m)
@@ -426,7 +445,7 @@ async function startBot() {
       }
 
       if (cmd === "myorder") {
-        const myOrders = db.orders.filter(o => o.user === senderNumber)
+        const myOrders = db.orders.filter(o => String(o.user) === String(senderNumber))
 
         if (!myOrders.length) {
           return reply(sock, from, "📭 Kamu belum punya order", m)
