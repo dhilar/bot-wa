@@ -173,8 +173,12 @@ async function startBot() {
       }
       cooldown.set(senderNumber, now)
 
-      const owner = isOwner(senderNumber, config.ownerNumbers)
-      let db = loadDB(config.dbFile)
+      const owner = isOwner(
+        senderJid,
+        senderNumber,
+        config.ownerNumbers,
+        config.ownerJids
+      )
 
       if (cmd === "menu") {
         return reply(sock, from, makeMenu(pushName), m)
