@@ -147,6 +147,9 @@ async function startBot() {
       const from = m.key.remoteJid
       const senderJid = m.key.participant || from
       const senderNumber = normalizeJidToNumber(senderJid)
+        console.log("SENDER:", senderJid)
+        console.log("SENDER NUMBER:", senderNumber)
+        console.log("OWNER LIST:", config.ownerNumbers)
       const pushName = m.pushName || "User"
       const isGroup = from.endsWith("@g.us")
 
