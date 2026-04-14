@@ -3,7 +3,10 @@
     "-menu",
     "-ping",
     "-runtime",
-    "-owner"
+    "-owner",
+    "-s",
+    "-stiker",
+    "-sticker"
   ],
   "produk": [
     "-list show",

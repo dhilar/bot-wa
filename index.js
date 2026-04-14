@@ -111,6 +111,18 @@ ${group || "│ • belum ada"}
 `.trim()
 }
 
+function formatProductList(db) {
+  if (!db.list.length) return "📭 List produk kosong"
+
+  return db.list.map(item => {
+    return `🆔 ${item.id}
+📦 ${item.nama}
+💰 Harga: ${item.harga}
+🗂 Kategori: ${item.kategori}
+📌 Status: ${item.status}`
+  }).join("\n\n")
+}
+
 function createOrderId() {
   return "ORD-" + Date.now()
 }
@@ -311,20 +323,9 @@ async function startBot() {
         const sub = (args[0] || "").toLowerCase()
 
         if (sub === "show") {
-          if (!db.list.length) {
-            return reply(sock, from, "📭 List produk kosong", m)
-          }
-
-          const textOut = db.list.map(item => {
-            return `🆔 ${item.id}
-📦 ${item.nama}
-💰 Harga: ${item.harga}
-🗂 Kategori: ${item.kategori}
-📌 Status: ${item.status}`
-          }).join("\n\n")
-
-          return reply(sock, from, `╭─❖ LIST PRODUK\n\n${textOut}\n╰─────────────`, m)
-        }
+        const textOut = formatProductList(db)
+        return reply(sock, from, `╭─❖ LIST PRODUK\n\n${textOut}\n╰─────────────`, m)
+      }
 
         if (sub === "kategori") {
           const kategori = args.slice(1).join(" ").trim().toLowerCase()
@@ -583,6 +584,11 @@ async function startBot() {
 
         await sock.groupSettingUpdate(from, "not_announcement")
         return reply(sock, from, "🔓 Grup dibuka", m)
+      }
+
+      if (cmd === "produk") {
+        const textOut = formatProductList(db)
+        return reply(sock, from, `╭─❖ LIST PRODUK\n\n${textOut}\n╰─────────────`, m)
       }
     
       if (cmd === "sticker" || cmd === "s") {
