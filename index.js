@@ -6,6 +6,7 @@ const {
 } = require("@whiskeysockets/baileys")
 
 const qrcode = require("qrcode-terminal")
+const { Sticker, StickerTypes } = require("wa-sticker-formatter")
 const os = require("os")
 
 const config = require("./config")
@@ -35,12 +36,24 @@ function reply(sock, jid, text, quoted = null) {
     quoted ? { quoted } : {}
   )
 }
-async function sendSticker(sock, jid, media, quoted) {
-  return sock.sendMessage(
-    jid,
-    { sticker: media },
-    quoted ? { quoted } : {}
-  )
+async function sendSticker(sock, jid, buffer, quoted, packname = "MyBot", author = "Owner") {
+  try {
+    const sticker = new Sticker(buffer, {
+      pack: packname,
+      author: author,
+      type: StickerTypes.FULL,
+      quality: 70
+    })
+
+    const stickerBuffer = await sticker.toBuffer()
+
+    return await sock.sendMessage(jid, {
+      sticker: stickerBuffer
+    }, { quoted })
+
+  } catch (err) {
+    console.error("Sticker convert error:", err)
+  }
 }
 
 function makeMenu(pushName = "User") {
@@ -556,22 +569,19 @@ async function startBot() {
       if (cmd === "sticker" || cmd === "s") {
         try {
           let quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage
-          let mime = null
-          let message = null
+          let msg = null
 
           if (quoted) {
-            message = quoted
-            mime = Object.keys(quoted)[0]
+            msg = { message: quoted }
           } else if (m.message?.imageMessage) {
-            message = m.message
-            mime = "imageMessage"
+            msg = m
           }
 
-          if (!mime || !mime.includes("image")) {
+          if (!msg) {
             return reply(sock, from, "❌ Kirim/reply gambar", m)
           }
 
-          const buffer = await sock.downloadMediaMessage({ message })
+          const buffer = await sock.downloadMediaMessage(msg)
 
           await sendSticker(sock, from, buffer, m)
 
@@ -583,63 +593,90 @@ async function startBot() {
 
 
       if (cmd === "spam") {
-        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+
+        const groupMeta = await sock.groupMetadata(from)
+
+        const isAdmin = groupMeta.participants.some(
+          p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
+        )
+
+        if (!isAdmin) return reply(sock, from, "❌ Khusus admin", m)
 
         if (args.length < 3) {
-          return reply(sock, from, "❌ Format: -spam teks jumlah delay(ms)", m)
+          return reply(sock, from,
+            "❌ Format:\n-spam teks jumlah delay(ms)\natau\n-spam 628xxxx teks jumlah delay",
+            m
+          )
         }
 
-        const textSpam = args.slice(0, -2).join(" ")
-        const jumlah = Number(args[args.length - 2])
-        const delay = Number(args[args.length - 1])
+        let target = from
+        let textSpam = ""
+        let jumlah, delay
+
+        // kirim ke nomor lain
+        if (args[0].startsWith("62")) {
+          target = args[0] + "@s.whatsapp.net"
+          textSpam = args.slice(1, -2).join(" ")
+          jumlah = Number(args[args.length - 2])
+          delay = Number(args[args.length - 1])
+
+          // 🔥 proteksi: hanya owner boleh spam luar
+          if (!owner) {
+            return reply(sock, from, "❌ Spam ke nomor luar hanya owner", m)
+          }
+
+        } else {
+          textSpam = args.slice(0, -2).join(" ")
+          jumlah = Number(args[args.length - 2])
+          delay = Number(args[args.length - 1])
+        }
 
         if (!textSpam || isNaN(jumlah) || isNaN(delay)) {
           return reply(sock, from, "❌ Format salah", m)
         }
 
-        if (jumlah > 10) {
-          return reply(sock, from, "❌ Max 10 spam", m)
-        }
+        // 🔥 limit biar aman
+        if (jumlah > 10) return reply(sock, from, "❌ Max 10 spam", m)
+        if (delay < 2000) return reply(sock, from, "❌ Delay minimal 2000ms", m)
 
-        if (delay < 1000) {
-          return reply(sock, from, "❌ Delay minimal 1000ms (anti banned)", m)
-        }
+        await reply(sock, from, "✅ Spam dimulai...", m)
 
         for (let i = 0; i < jumlah; i++) {
-          await reply(sock, from, textSpam)
+          await sock.sendMessage(target, { text: textSpam })
           await new Promise(res => setTimeout(res, delay))
         }
 
-        return
+        await reply(sock, from, "✅ Spam selesai", m)
       }
 
       if (cmd === "tagall") {
         if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
 
-        try {
-          const groupMeta = await sock.groupMetadata(from)
-          const members = groupMeta.participants
+        const groupMeta = await sock.groupMetadata(from)
 
-          let textTag = "📢 TAG ALL\n\n"
-          let mentions = []
+        const isAdmin = groupMeta.participants.some(
+          p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
+        )
 
-          for (let mem of members) {
-            mentions.push(mem.id)
-            textTag += `• @${mem.id.split("@")[0]}\n`
-          }
+        if (!isAdmin) return reply(sock, from, "❌ Khusus admin", m)
 
-          // delay kecil biar gak spam API
-          await new Promise(r => setTimeout(r, 800))
+        const participants = groupMeta.participants
 
-          await sock.sendMessage(from, {
-            text: textTag,
-            mentions
-          }, { quoted: m })
+        const textCustom = args.join(" ") || "📢 TAG ALL"
 
-        } catch (err) {
-          console.error("Tagall error:", err)
-          return reply(sock, from, "❌ Gagal tag semua member", m)
+        let teks = textCustom + "\n\n"
+        let mentions = []
+
+        for (let p of participants) {
+          mentions.push(p.id)
+          teks += `• @${p.id.split("@")[0]}\n`
         }
+
+        await sock.sendMessage(from, {
+          text: teks,
+          mentions
+        }, { quoted: m })
       }
 
       return reply(sock, from, "❓ Command tidak dikenal. Ketik -menu", m)
