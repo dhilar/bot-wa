@@ -35,6 +35,13 @@ function reply(sock, jid, text, quoted = null) {
     quoted ? { quoted } : {}
   )
 }
+async function sendSticker(sock, jid, media, quoted) {
+  return sock.sendMessage(
+    jid,
+    { sticker: media },
+    quoted ? { quoted } : {}
+  )
+}
 
 function makeMenu(pushName = "User") {
   const main = (commandsTemplate.main || []).map(x => `│ • ${x}`).join("\n")
@@ -544,6 +551,95 @@ async function startBot() {
 
         await sock.groupSettingUpdate(from, "not_announcement")
         return reply(sock, from, "🔓 Grup dibuka", m)
+      }
+    
+      if (cmd === "sticker" || cmd === "s") {
+        try {
+          let quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage
+          let mime = null
+          let message = null
+
+          if (quoted) {
+            message = quoted
+            mime = Object.keys(quoted)[0]
+          } else if (m.message?.imageMessage) {
+            message = m.message
+            mime = "imageMessage"
+          }
+
+          if (!mime || !mime.includes("image")) {
+            return reply(sock, from, "❌ Kirim/reply gambar", m)
+          }
+
+          const buffer = await sock.downloadMediaMessage({ message })
+
+          await sendSticker(sock, from, buffer, m)
+
+        } catch (err) {
+          console.error("Sticker error:", err)
+          return reply(sock, from, "❌ Gagal buat sticker", m)
+        }
+      }
+
+
+      if (cmd === "spam") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        if (args.length < 3) {
+          return reply(sock, from, "❌ Format: -spam teks jumlah delay(ms)", m)
+        }
+
+        const textSpam = args.slice(0, -2).join(" ")
+        const jumlah = Number(args[args.length - 2])
+        const delay = Number(args[args.length - 1])
+
+        if (!textSpam || isNaN(jumlah) || isNaN(delay)) {
+          return reply(sock, from, "❌ Format salah", m)
+        }
+
+        if (jumlah > 10) {
+          return reply(sock, from, "❌ Max 10 spam", m)
+        }
+
+        if (delay < 1000) {
+          return reply(sock, from, "❌ Delay minimal 1000ms (anti banned)", m)
+        }
+
+        for (let i = 0; i < jumlah; i++) {
+          await reply(sock, from, textSpam)
+          await new Promise(res => setTimeout(res, delay))
+        }
+
+        return
+      }
+
+      if (cmd === "tagall") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+
+        try {
+          const groupMeta = await sock.groupMetadata(from)
+          const members = groupMeta.participants
+
+          let textTag = "📢 TAG ALL\n\n"
+          let mentions = []
+
+          for (let mem of members) {
+            mentions.push(mem.id)
+            textTag += `• @${mem.id.split("@")[0]}\n`
+          }
+
+          // delay kecil biar gak spam API
+          await new Promise(r => setTimeout(r, 800))
+
+          await sock.sendMessage(from, {
+            text: textTag,
+            mentions
+          }, { quoted: m })
+
+        } catch (err) {
+          console.error("Tagall error:", err)
+          return reply(sock, from, "❌ Gagal tag semua member", m)
+        }
       }
 
       return reply(sock, from, "❓ Command tidak dikenal. Ketik -menu", m)
