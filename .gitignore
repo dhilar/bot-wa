@@ -1,4 +1,18 @@
-node_modules
-session
+# dependency
+node_modules/
+
+# session whatsapp (BAILEYS LOGIN)
+session/
+
+# log files
 *.log
+
+# database lokal (opsional)
 db.json
+
+# environment file (kalau pakai)
+.env
+
+# OS junk
+.DS_Store
+Thumbs.db
