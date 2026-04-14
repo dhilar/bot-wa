@@ -1,0 +1,21 @@
+{
+  "orders": [
+    {
+      "id": "ORD-1776100178519",
+      "nama": "Bagas",
+      "produk": " chatgpt pro",
+      "qty": "1",
+      "alamat": "-",
+      "user": "13001486762213@lid",
+      "status": "success",
+      "time": "2026-04-13T17:09:38.519Z"
+    }
+  ],
+  "list": [
+    "Chatgpt plus 6500",
+    "Chatgpt pro 8000",
+    "YouTube Premium 3000",
+    "YouTube music premium 3000",
+    "Netflix 1month 20000"
+  ]
+}
