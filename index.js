@@ -7,6 +7,7 @@ const {
 
 const qrcode = require("qrcode-terminal")
 const { Sticker, StickerTypes } = require("wa-sticker-formatter")
+const { downloadContentFromMessage } = require("@whiskeysockets/baileys")
 const os = require("os")
 
 const config = require("./config")
@@ -54,6 +55,24 @@ async function sendSticker(sock, jid, buffer, quoted, packname = "MyBot", author
   } catch (err) {
     console.error("Sticker convert error:", err)
   }
+}
+
+async function downloadMedia(msg) {
+  const m = msg.message ? msg.message : msg
+
+  const type = Object.keys(m)[0]
+
+  const stream = await downloadContentFromMessage(
+    m[type],
+    type.replace("Message", "")
+  )
+
+  let buffer = Buffer.from([])
+  for await (const chunk of stream) {
+    buffer = Buffer.concat([buffer, chunk])
+  }
+
+  return buffer
 }
 
 function makeMenu(pushName = "User") {
@@ -581,7 +600,7 @@ async function startBot() {
             return reply(sock, from, "❌ Kirim/reply gambar", m)
           }
 
-          const buffer = await sock.downloadMediaMessage(msg)
+          const buffer = await downloadMedia(msg)
 
           await sendSticker(sock, from, buffer, m)
 
