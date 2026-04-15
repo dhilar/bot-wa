@@ -220,6 +220,79 @@ async function startBot() {
     }
   }, 60 * 1000) // Every 1 minute check
 
+  // Auto Status (Story) - Check every minute
+   setInterval(async () => {
+     const db = loadDB(config.dbFile)
+     const now = Date.now()
+     const s = db.settings?.autoStatus || {}
+ 
+     if (s.enabled && s.text && s.interval) {
+       const lastSent = s.lastSent || 0
+       const intervalMs = s.interval * 60 * 1000
+       
+       if (now - lastSent >= intervalMs) {
+         try {
+           // Ambil semua member dari grup-grup bot untuk dikirimi status
+           const groups = await sock.groupFetchAllParticipating()
+           const participants = new Set()
+           
+           for (const g of Object.values(groups)) {
+             for (const p of g.participants) {
+               participants.add(p.id)
+             }
+           }
+ 
+           await sock.sendMessage("status@broadcast", { 
+             text: s.text 
+           }, { 
+             statusJidList: Array.from(participants) 
+           })
+           
+           // Update lastSent
+           db.settings.autoStatus.lastSent = now
+           saveDB(config.dbFile, db)
+           console.log(`[AUTO STATUS] Terkirim ke ${participants.size} kontak (WhatsApp Status)`)
+         } catch (e) {
+           console.error(`[AUTO STATUS] Gagal:`, e.message)
+         }
+       }
+     }
+  }, 60 * 1000)
+
+  // Auto Status Per Group (Story specifically for group members)
+  setInterval(async () => {
+    const db = loadDB(config.dbFile)
+    const now = Date.now()
+
+    for (const groupId of Object.keys(db.groups)) {
+      const g = db.groups[groupId]
+      if (g.groupStatus && g.groupStatus.enabled && g.groupStatus.text && g.groupStatus.interval) {
+        const lastSent = g.groupStatus.lastSent || 0
+        const intervalMs = g.groupStatus.interval * 60 * 1000
+        
+        if (now - lastSent >= intervalMs) {
+          try {
+            const groupMeta = await sock.groupMetadata(groupId)
+            const participants = groupMeta.participants.map(p => p.id)
+            
+            await sock.sendMessage("status@broadcast", { 
+              text: g.groupStatus.text 
+            }, { 
+              statusJidList: participants 
+            })
+            
+            // Update lastSent
+            db.groups[groupId].groupStatus.lastSent = now
+            saveDB(config.dbFile, db)
+            console.log(`[GROUP STATUS] Terkirim ke member grup ${groupId}`)
+          } catch (e) {
+            console.error(`[GROUP STATUS] Gagal ke ${groupId}:`, e.message)
+          }
+        }
+      }
+    }
+  }, 60 * 1000)
+
   sock.ev.on("creds.update", saveCreds)
 
   sock.ev.on("connection.update", (update) => {
@@ -1266,32 +1339,31 @@ Ketik *-cekorder ${id}* untuk melihat status.
 
 1️⃣ *MANAJEMEN PRODUK*
 • *Tambah*: \`-list add Netflix|35000|Streaming|Ready|50\`
-  └ _Output: Kartu produk baru dengan stok 50._
 • *Edit*: \`-list edit 1 stock=100\`
-  └ _Output: "✅ Produk 1 diperbarui: stock = 100"_
 
 2️⃣ *MANAJEMEN ORDER*
 • *Proses*: \`-process ORD-123\`
-  └ _Output: "✅ Status order ORD-123 diubah ke PROCESS"_
 • *Selesai*: \`-done ORD-123\`
-  └ _Output: "✅ Status order ORD-123 diubah ke success"_
 • *Catatan*: \`-addnote ORD-123 Akun: abc@mail.com | Pass: 123\`
+• *Refund*: \`-refund ORD-123\` (Stok balik otomatis)
 
-3️⃣ *AUTO MESSAGE (AUTO STATUS GRUP)*
-• *Set*: \`-setautomsg Promo Netflix|60\` (Teks|Menit)
-• *On/Off*: \`-automsg on\` atau \`-automsg off\`
-• *Remove*: \`-removeautomsg\`
+3️⃣ *AUTO STATUS & MESSAGE*
+• *Status Grup (Story)*: \`-setgroupstatus Teks|Menit\`
+  └ _Member grup akan lihat bot punya SW baru._
+• *Pesan Grup (Chat)*: \`-setautomsg Teks|Menit\`
+  └ _Bot kirim chat otomatis ke dalam grup._
+• *Status Global (Story)*: \`-setautostatus Teks|Menit\`
+  └ _Semua kontak akan lihat SW bot._
 
-4️⃣ *PROMOSI & BROADCAST*
-• *Hide Tag*: \`-hta Promo Netflix!\`
-  └ _Output: Pesan terkirim ke grup tanpa daftar tag, tapi semua kena notif._
-• *BC Promo*: \`-bcpromo Promo Spesial!\`
-  └ _Output: Kirim ke semua grup dengan delay 8 detik._
+4️⃣ *PROMOSI & KEAMANAN*
+• *Hide Tag*: \`-hta Promo!\` (Tag semua tanpa list)
+• *Mute*: \`-mute @tag\` (Hapus pesan dia otomatis)
+• *Anti-Link*: \`-antilink on\` (Auto kick pengirim link)
 
-5️⃣ *KEAMANAN & SISTEM*
-• *Mute*: \`-mute @tag\`
-• *Stats*: \`-stats\` (Monitor VPS RAM 1GB)
+5️⃣ *SISTEM*
+• *Stats*: \`-stats\` (Monitor RAM VPS 1GB)
 • *Backup*: \`-backup\` (Bot kirim file db.json)
+• *Clear Cache*: \`-clearcache\` (Manual bersihkan RAM)
 `.trim()
 
         return reply(sock, from, textGuide, m)
@@ -1349,6 +1421,111 @@ Ketik *-cekorder ${id}* untuk melihat status.
         saveDB(config.dbFile, db)
 
         return reply(sock, from, "✅ Setting Auto Message berhasil dihapus", m)
+      }
+
+      // Auto Status (Story) Commands
+      if (cmd === "setautostatus" || cmd === "editautostatus") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        const raw = args.join(" ")
+        const [textStatus, intervalRaw] = raw.split("|").map(x => x.trim())
+        const interval = Number(intervalRaw)
+
+        if (!textStatus || isNaN(interval) || interval < 1) {
+          return reply(sock, from, `❌ Format: -${cmd} Teks|IntervalMenit\nContoh: -${cmd} Promo Netflix Story|120`, m)
+        }
+
+        if (!db.settings) db.settings = {}
+        db.settings.autoStatus = {
+          enabled: db.settings.autoStatus?.enabled || false,
+          text: textStatus,
+          interval: interval,
+          lastSent: 0
+        }
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, `✅ Auto Status (Story) berhasil diatur!\n\n📝 Teks: ${textStatus}\n⏱ Interval: ${interval} menit\n📌 Status: ${db.settings.autoStatus.enabled ? "ON" : "OFF"}\n\nKetik *-autostatus on* untuk mengaktifkan ke Story WA kamu.`, m)
+      }
+
+      if (cmd === "autostatus") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        const sub = (args[0] || "").toLowerCase()
+        if (sub !== "on" && sub !== "off") return reply(sock, from, "Gunakan: -autostatus on/off", m)
+
+        if (!db.settings?.autoStatus?.text) {
+          return reply(sock, from, "❌ Atur teks dulu dengan: -setautostatus Teks|Menit", m)
+        }
+
+        db.settings.autoStatus.enabled = (sub === "on")
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, `✅ Auto Status (Story) diubah ke ${sub.toUpperCase()}`, m)
+      }
+
+      if (cmd === "removeautostatus") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        if (!db.settings?.autoStatus) return reply(sock, from, "❌ Tidak ada setting Auto Status", m)
+
+        delete db.settings.autoStatus
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, "✅ Setting Auto Status (Story) berhasil dihapus", m)
+      }
+
+      // Group Status (Per-Group Story) Commands
+      if (cmd === "setgroupstatus" || cmd === "editgroupstatus") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        const raw = args.join(" ")
+        const [textStatus, intervalRaw] = raw.split("|").map(x => x.trim())
+        const interval = Number(intervalRaw)
+
+        if (!textStatus || isNaN(interval) || interval < 1) {
+          return reply(sock, from, `❌ Format: -${cmd} Teks|IntervalMenit\nContoh: -${cmd} Promo Netflix Group|120`, m)
+        }
+
+        if (!db.groups[from]) db.groups[from] = {}
+        db.groups[from].groupStatus = {
+          enabled: db.groups[from].groupStatus?.enabled || false,
+          text: textStatus,
+          interval: interval,
+          lastSent: 0
+        }
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, `✅ Status Grup (Story) berhasil diatur!\n\n📝 Teks: ${textStatus}\n⏱ Interval: ${interval} menit\n📌 Status: ${db.groups[from].groupStatus.enabled ? "ON" : "OFF"}\n\nKetik *-groupstatus on* untuk mengaktifkan.`, m)
+      }
+
+      if (cmd === "groupstatus") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        const sub = (args[0] || "").toLowerCase()
+        if (sub !== "on" && sub !== "off") return reply(sock, from, "Gunakan: -groupstatus on/off", m)
+
+        if (!db.groups[from]?.groupStatus?.text) {
+          return reply(sock, from, "❌ Atur teks dulu dengan: -setgroupstatus Teks|Menit", m)
+        }
+
+        db.groups[from].groupStatus.enabled = (sub === "on")
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, `✅ Status Grup (Story) diubah ke ${sub.toUpperCase()}`, m)
+      }
+
+      if (cmd === "removegroupstatus") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        if (!db.groups[from]?.groupStatus) return reply(sock, from, "❌ Tidak ada setting Status Grup", m)
+
+        delete db.groups[from].groupStatus
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, "✅ Setting Status Grup berhasil dihapus", m)
       }
 
       if (cmd === "tagadmin") {
