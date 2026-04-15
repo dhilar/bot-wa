@@ -187,6 +187,39 @@ async function startBot() {
     }
   }, 10 * 60 * 1000) // Every 10 minutes
 
+  // Auto Message (Auto Status) Group - Check every minute
+  setInterval(async () => {
+    const db = loadDB(config.dbFile)
+    const now = Date.now()
+
+    for (const groupId of Object.keys(db.groups)) {
+      const g = db.groups[groupId]
+      if (g.autoMsg && g.autoMsg.enabled && g.autoMsg.text && g.autoMsg.interval) {
+        const lastSent = g.autoMsg.lastSent || 0
+        const intervalMs = g.autoMsg.interval * 60 * 1000 // Convert minutes to MS
+        
+        if (now - lastSent >= intervalMs) {
+          try {
+            const groupMeta = await sock.groupMetadata(groupId)
+            const mentions = groupMeta.participants.map(p => p.id)
+            
+            await sock.sendMessage(groupId, { 
+              text: g.autoMsg.text,
+              mentions: mentions 
+            })
+            
+            // Update lastSent
+            db.groups[groupId].autoMsg.lastSent = now
+            saveDB(config.dbFile, db)
+            console.log(`[AUTO MSG] Terkirim ke ${groupId}`)
+          } catch (e) {
+            console.error(`[AUTO MSG] Gagal ke ${groupId}:`, e.message)
+          }
+        }
+      }
+    }
+  }, 60 * 1000) // Every 1 minute check
+
   sock.ev.on("creds.update", saveCreds)
 
   sock.ev.on("connection.update", (update) => {
@@ -1205,6 +1238,117 @@ Ketik *-cekorder ${id}* untuk melihat status.
           text: teks,
           mentions
         }, { quoted: m })
+      }
+
+      if (cmd === "hidetagall" || cmd === "hta") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        const groupMeta = await sock.groupMetadata(from)
+        const participants = groupMeta.participants
+        
+        const textCustom = args.join(" ")
+        if (!textCustom) return reply(sock, from, "❌ Masukkan teks promosi\nContoh: -hta Promo Netflix Murah!", m)
+
+        let mentions = participants.map(p => p.id)
+
+        return await sock.sendMessage(from, {
+          text: textCustom,
+          mentions
+        })
+      }
+
+      if (cmd === "guide") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        
+        const textGuide = `
+📖 *OWNER GUIDE - CONTOH PERINTAH & OUTPUT*
+
+1️⃣ *MANAJEMEN PRODUK*
+• *Tambah*: \`-list add Netflix|35000|Streaming|Ready|50\`
+  └ _Output: Kartu produk baru dengan stok 50._
+• *Edit*: \`-list edit 1 stock=100\`
+  └ _Output: "✅ Produk 1 diperbarui: stock = 100"_
+
+2️⃣ *MANAJEMEN ORDER*
+• *Proses*: \`-process ORD-123\`
+  └ _Output: "✅ Status order ORD-123 diubah ke PROCESS"_
+• *Selesai*: \`-done ORD-123\`
+  └ _Output: "✅ Status order ORD-123 diubah ke success"_
+• *Catatan*: \`-addnote ORD-123 Akun: abc@mail.com | Pass: 123\`
+
+3️⃣ *AUTO MESSAGE (AUTO STATUS GRUP)*
+• *Set*: \`-setautomsg Promo Netflix|60\` (Teks|Menit)
+• *On/Off*: \`-automsg on\` atau \`-automsg off\`
+• *Remove*: \`-removeautomsg\`
+
+4️⃣ *PROMOSI & BROADCAST*
+• *Hide Tag*: \`-hta Promo Netflix!\`
+  └ _Output: Pesan terkirim ke grup tanpa daftar tag, tapi semua kena notif._
+• *BC Promo*: \`-bcpromo Promo Spesial!\`
+  └ _Output: Kirim ke semua grup dengan delay 8 detik._
+
+5️⃣ *KEAMANAN & SISTEM*
+• *Mute*: \`-mute @tag\`
+• *Stats*: \`-stats\` (Monitor VPS RAM 1GB)
+• *Backup*: \`-backup\` (Bot kirim file db.json)
+`.trim()
+
+        return reply(sock, from, textGuide, m)
+      }
+
+      // Auto Message (Auto Status) Commands
+      if (cmd === "setautomsg" || cmd === "editautomsg") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        const raw = args.join(" ")
+        const [textMsg, intervalRaw] = raw.split("|").map(x => x.trim())
+        const interval = Number(intervalRaw)
+
+        if (!textMsg || isNaN(interval) || interval < 1) {
+          return reply(sock, from, `❌ Format: -${cmd} Teks|IntervalMenit\nContoh: -${cmd} Promo Netflix Murah|60`, m)
+        }
+
+        if (!db.groups[from]) db.groups[from] = {}
+        db.groups[from].autoMsg = {
+          enabled: db.groups[from].autoMsg?.enabled || false,
+          text: textMsg,
+          interval: interval,
+          lastSent: 0
+        }
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, `✅ Auto Message berhasil diatur!\n\n📝 Teks: ${textMsg}\n⏱ Interval: ${interval} menit\n📌 Status: ${db.groups[from].autoMsg.enabled ? "ON" : "OFF"}\n\nKetik *-automsg on* untuk mengaktifkan.`, m)
+      }
+
+      if (cmd === "automsg") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        const sub = (args[0] || "").toLowerCase()
+        if (sub !== "on" && sub !== "off") return reply(sock, from, "Gunakan: -automsg on/off", m)
+
+        if (!db.groups[from]?.autoMsg?.text) {
+          return reply(sock, from, "❌ Atur teks dulu dengan: -setautomsg Teks|Menit", m)
+        }
+
+        db.groups[from].autoMsg.enabled = (sub === "on")
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, `✅ Auto Message diubah ke ${sub.toUpperCase()}`, m)
+      }
+
+      if (cmd === "removeautomsg") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        if (!db.groups[from]?.autoMsg) return reply(sock, from, "❌ Tidak ada setting Auto Message di grup ini", m)
+
+        delete db.groups[from].autoMsg
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, "✅ Setting Auto Message berhasil dihapus", m)
       }
 
       if (cmd === "tagadmin") {

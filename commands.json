@@ -48,8 +48,12 @@
     "-autodelete on/off",
     "-setwelcome <teks>",
     "-setgoodbye <teks>",
+    "-setautomsg <teks>|<menit>",
+    "-automsg on/off",
+    "-removeautomsg",
     "-lock on/off",
     "-tagall",
+    "-hidetagall / -hta <teks>",
     "-tagadmin",
     "-ganalytics"
   ]
