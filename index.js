@@ -31,10 +31,10 @@ function log(...args) {
   if (config.debug) console.log("[BOT LOG]", ...args)
 }
 
-function reply(sock, jid, text, quoted = null) {
+function reply(sock, jid, text, quoted = null, options = {}) {
   return sock.sendMessage(
     jid,
-    { text },
+    { text, ...options },
     quoted ? { quoted } : {}
   )
 }
@@ -117,15 +117,19 @@ ${owner || "┃ • Belum ada"}
 }
 
 function formatProductList(db) {
-  if (!db.list.length) return "📭 List produk kosong"
+  if (!db.list.length) return "📭 *List produk kosong*"
 
   return db.list.map(item => {
-    return `🆔 ${item.id}
-📦 ${item.nama}
-💰 Harga: ${item.harga}
-🗂 Kategori: ${item.kategori}
-📦 Stok: ${item.stock || 0}
-📌 Status: ${item.status}`
+    const statusEmoji = item.status === "Ready" ? "✅" : "⛔"
+    const stockColor = item.stock > 10 ? "🟢" : item.stock > 0 ? "🟡" : "🔴"
+    return `┌─────────────────
+│ � *${item.nama}*
+│─────────────────
+│ 💰 *Rp ${Number(item.harga).toLocaleString("id-ID")}*
+│ � Kategori: _${item.kategori}_
+│ ${stockColor} Stok: *${item.stock || 0}*
+│ ${statusEmoji} Status: *${item.status}*
+└─────────────────`
   }).join("\n\n")
 }
 
@@ -275,10 +279,23 @@ async function startBot() {
        }
        saveDB(config.dbFile, db)
 
-       // Group logic (Anti-link, Anti-spam)
+       // Group logic (Anti-link, Anti-spam, Mute)
        if (isGroup) {
         const groupSettings = db.groups[from] || {}
         
+        // Mute logic
+        if (groupSettings.mutedUsers && groupSettings.mutedUsers.includes(senderJid)) {
+          const groupMeta = await sock.groupMetadata(from)
+          const isAdmin = groupMeta.participants.some(
+            p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
+          )
+          
+          if (!isAdmin && !owner) {
+            await sock.sendMessage(from, { delete: m.key })
+            return
+          }
+        }
+
         // Anti-link
         const isLink = /chat\.whatsapp\.com\/|wa\.me\//i.test(text)
         if (groupSettings.antilink && isLink) {
@@ -590,7 +607,8 @@ async function startBot() {
         if (cmd === "bcuser") {
           targets = Object.keys(db.users)
         } else {
-          targets = Object.keys(await sock.groupFetchAllParticipatingGroups())
+          const groups = await sock.groupFetchAllParticipating()
+          targets = Object.keys(groups)
         }
 
         const isPromo = cmd === "bcpromo"
@@ -602,7 +620,7 @@ async function startBot() {
         for (let t of targets) {
           try {
             await sock.sendMessage(t, { text: header + textOut + footer })
-            await new Promise(res => setTimeout(res, 1000))
+            await new Promise(res => setTimeout(res, 8000))
           } catch (e) {
             console.error(`Gagal kirim ke ${t}:`, e)
           }
@@ -615,7 +633,7 @@ async function startBot() {
 
         if (sub === "show") {
           const textOut = formatProductList(db)
-          return reply(sock, from, `╭─❖ LIST PRODUK\n\n${textOut}\n╰─────────────`, m)
+          return reply(sock, from, `🛒 *DAFTAR PRODUK*\n\n${textOut}\n\n_Order: -order Nama,ID,Qty,Alamat_`, m)
         }
 
         if (sub === "search") {
@@ -1005,25 +1023,75 @@ Ketik *-cekorder ${id}* untuk melihat status.
         return reply(sock, from, "✅ User berhasil dikeluarkan", m)
       }
 
-      if (cmd === "close" || cmd === "mute") {
+      if (cmd === "close") {
         if (!isGroup) return reply(sock, from, "❌ Hanya bisa di grup", m)
         if (!owner) return reply(sock, from, "❌ Khusus owner", m)
 
         await sock.groupSettingUpdate(from, "announcement")
-        return reply(sock, from, "🔒 Grup ditutup", m)
+        return reply(sock, from, "🔒 Grup ditutup (Hanya admin yang bisa kirim pesan)", m)
       }
 
-      if (cmd === "open" || cmd === "unmute") {
+      if (cmd === "open") {
         if (!isGroup) return reply(sock, from, "❌ Hanya bisa di grup", m)
         if (!owner) return reply(sock, from, "❌ Khusus owner", m)
 
         await sock.groupSettingUpdate(from, "not_announcement")
-        return reply(sock, from, "🔓 Grup dibuka", m)
+        return reply(sock, from, "� Grup dibuka (Semua bisa kirim pesan)", m)
+      }
+
+      if (cmd === "mute") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        const groupMeta = await sock.groupMetadata(from)
+        const isAdmin = groupMeta.participants.some(
+          p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
+        )
+        if (!isAdmin && !owner) return reply(sock, from, "❌ Khusus admin", m)
+
+        const target = m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || getQuotedParticipant(m)
+        if (!target) return reply(sock, from, "❌ Tag atau reply orang yang mau di-mute", m)
+
+        if (!db.groups[from]) db.groups[from] = {}
+        if (!db.groups[from].mutedUsers) db.groups[from].mutedUsers = []
+        
+        if (db.groups[from].mutedUsers.includes(target)) {
+           return reply(sock, from, "❌ User sudah di-mute", m)
+        }
+
+        db.groups[from].mutedUsers.push(target)
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, `✅ Berhasil mute @${target.split("@")[0]}. Setiap pesan dia bakal langsung dihapus!`, m, { mentions: [target] })
+      }
+
+      if (cmd === "unmute") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        const groupMeta = await sock.groupMetadata(from)
+        const isAdmin = groupMeta.participants.some(
+          p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
+        )
+        if (!isAdmin && !owner) return reply(sock, from, "❌ Khusus admin", m)
+
+        const target = m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || getQuotedParticipant(m)
+        if (!target) return reply(sock, from, "❌ Tag atau reply orang yang mau di-unmute", m)
+
+        if (!db.groups[from] || !db.groups[from].mutedUsers) {
+           return reply(sock, from, "❌ Belum ada user yang di-mute di grup ini", m)
+        }
+
+        const index = db.groups[from].mutedUsers.indexOf(target)
+        if (index === -1) {
+           return reply(sock, from, "❌ User tidak ada di daftar mute", m)
+        }
+
+        db.groups[from].mutedUsers.splice(index, 1)
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, `✅ Berhasil unmute @${target.split("@")[0]}`, m, { mentions: [target] })
       }
 
       if (cmd === "produk") {
         const textOut = formatProductList(db)
-        return reply(sock, from, `╭─❖ LIST PRODUK\n\n${textOut}\n╰─────────────`, m)
+        return reply(sock, from, `🛒 *DAFTAR PRODUK*\n\n${textOut}\n\n_Order: -order Nama,ID,Qty,Alamat_`, m)
       }
     
       if (cmd === "sticker" || cmd === "s") {

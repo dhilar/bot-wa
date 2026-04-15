@@ -39,6 +39,8 @@
   "group": [
     "-open / -close",
     "-kick (reply)",
+    "-mute @user",
+    "-unmute @user",
     "-antilink on/off",
     "-antispam on/off",
     "-welcome on/off",
