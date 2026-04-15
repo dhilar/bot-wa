@@ -257,6 +257,13 @@ async function startBot() {
       const rawText = parseMessageText(m.message)
       const text = cleanText(rawText)
 
+      const owner = isOwner(
+        senderJid,
+        senderNumber,
+        config.ownerNumbers,
+        config.ownerJids
+      )
+
       let db = loadDB(config.dbFile)
 
        // User System (XP/Level)
@@ -390,13 +397,6 @@ async function startBot() {
          if (diff < config.cooldownMs) return
        }
        cooldown.set(senderNumber, now)
-
-       const owner = isOwner(
-         senderJid,
-         senderNumber,
-         config.ownerNumbers,
-         config.ownerJids
-       )
 
        log("IS OWNER:", owner)
 
