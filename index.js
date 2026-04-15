@@ -25,6 +25,7 @@ const { getSystemInfo, clearTempFiles } = require("./lib/system")
 ensureDB(config.dbFile)
 
 const cooldown = new Map()
+const userMsgCount = new Map()
 
 function log(...args) {
   if (config.debug) console.log("[BOT LOG]", ...args)
@@ -83,31 +84,35 @@ function makeMenu(pushName = "User") {
   const group = (commandsTemplate.group || []).map(x => `│ • ${x}`).join("\n")
 
   return `
-╭─❖「 ${config.botName} 」
-│ Halo, ${pushName}
-│ Prefix: ${config.prefix}
-│ Platform: ${os.platform()}
-╰─────────────
-
-╭─❖ MAIN
-${main || "│ • belum ada"}
-╰─────────────
-
-╭─❖ PRODUK
-${produk || "│ • belum ada"}
-╰─────────────
-
-╭─❖ ORDER
-${order || "│ • belum ada"}
-╰─────────────
-
-╭─❖ OWNER
-${owner || "│ • belum ada"}
-╰─────────────
-
-╭─❖ GROUP
-${group || "│ • belum ada"}
-╰─────────────
+┏━━━「 *${config.botName.toUpperCase()}* 」━━━
+┃
+┃ 👋 Halo, *${pushName}*!
+┃ ⌨️ Prefix: \`${config.prefix}\`
+┃ 🕒 Time: ${new Date().toLocaleTimeString("id-ID", { timeZone: config.timezone })}
+┃
+┣━━━「 *MAIN MENU* 」
+${main || "┃ • Belum ada"}
+┃
+┣━━━「 *PRODUCT* 」
+${produk || "┃ • Belum ada"}
+┃
+┣━━━「 *ORDER* 」
+${order || "┃ • Belum ada"}
+┃
+┣━━━「 *GROUP* 」
+${group || "┃ • Belum ada"}
+┃
+┣━━━「 *OWNER* 」
+${owner || "┃ • Belum ada"}
+┃
+┣━━━「 *CARA ORDER* 」
+┃ 1. Cek produk: \`-list show\`
+┃ 2. Order produk:
+┃    \`-order Nama,ID,Qty,Alamat\`
+┃    _Contoh: -order Budi,2,1,Jakarta_
+┃ 3. Cek status: \`-cekorder ID\`
+┃
+┗━━━━━━━━━━━━━━━━━━━━
 `.trim()
 }
 
@@ -119,6 +124,7 @@ function formatProductList(db) {
 📦 ${item.nama}
 💰 Harga: ${item.harga}
 🗂 Kategori: ${item.kategori}
+📦 Stok: ${item.stock || 0}
 📌 Status: ${item.status}`
   }).join("\n\n")
 }
@@ -161,6 +167,22 @@ async function startBot() {
     syncFullHistory: false
   })
 
+  // Auto Memory & Cache Clear (Optimasi VPS 1GB)
+  setInterval(() => {
+    const memUsage = process.memoryUsage().rss
+    const limit = 512 * 1024 * 1024 // 512MB limit for auto clear
+    
+    if (memUsage > limit) {
+      console.log("⚠️ RAM Usage high, clearing cache...")
+      cooldown.clear()
+      userMsgCount.clear()
+      clearTempFiles()
+      if (global.gc) {
+        global.gc()
+      }
+    }
+  }, 10 * 60 * 1000) // Every 10 minutes
+
   sock.ev.on("creds.update", saveCreds)
 
   sock.ev.on("connection.update", (update) => {
@@ -190,6 +212,32 @@ async function startBot() {
     }
   })
 
+  sock.ev.on("group-participants.update", async (update) => {
+    const { id, participants, action } = update
+    const db = loadDB(config.dbFile)
+    const groupSettings = db.groups[id] || {}
+
+    if (action === "add" && groupSettings.welcome) {
+      for (let p of participants) {
+        const text = groupSettings.welcomeMsg || `Selamat datang @${p.split("@")[0]} di grup ini!`
+        await sock.sendMessage(id, {
+          text,
+          mentions: [p]
+        })
+      }
+    }
+
+    if (action === "remove" && groupSettings.goodbye) {
+      for (let p of participants) {
+        const text = groupSettings.goodbyeMsg || `Selamat tinggal @${p.split("@")[0]}!`
+        await sock.sendMessage(id, {
+          text,
+          mentions: [p]
+        })
+      }
+    }
+  })
+
   sock.ev.on("messages.upsert", async ({ messages }) => {
     try {
       const m = messages[0]
@@ -205,37 +253,146 @@ async function startBot() {
       const rawText = parseMessageText(m.message)
       const text = cleanText(rawText)
 
-      if (!text.startsWith(config.prefix)) return
-
-      log("RAW:", rawText)
-      log("TEXT:", text)
-      log("SENDER:", senderJid)
-      log("SENDER NUMBER:", senderNumber)
-      log("OWNER NUMBERS:", config.ownerNumbers)
-      log("OWNER JIDS:", config.ownerJids)
-
-      const body = text.slice(config.prefix.length).trim()
-      const parts = body.split(/\s+/)
-      const cmd = (parts[0] || "").toLowerCase()
-      const args = parts.slice(1)
-
-      const now = Date.now()
-      if (cooldown.has(senderNumber)) {
-        const diff = now - cooldown.get(senderNumber)
-        if (diff < config.cooldownMs) return
-      }
-      cooldown.set(senderNumber, now)
-
-      const owner = isOwner(
-        senderJid,
-        senderNumber,
-        config.ownerNumbers,
-        config.ownerJids
-      )
-
-      log("IS OWNER:", owner)
-
       let db = loadDB(config.dbFile)
+
+       // User System (XP/Level)
+       if (!db.users[senderJid]) {
+         db.users[senderJid] = {
+           xp: 0,
+           level: 1,
+           name: pushName,
+           orderCount: 0
+         }
+       }
+       const user = db.users[senderJid]
+       user.name = pushName
+       user.xp += Math.floor(Math.random() * 10) + 5
+       const nextLevelXp = user.level * 100
+       if (user.xp >= nextLevelXp) {
+         user.level++
+         user.xp = 0
+         await reply(sock, from, `🎉 Selamat @${senderNumber}! Kamu naik ke level ${user.level}`, m)
+       }
+       saveDB(config.dbFile, db)
+
+       // Group logic (Anti-link, Anti-spam)
+       if (isGroup) {
+        const groupSettings = db.groups[from] || {}
+        
+        // Anti-link
+        const isLink = /chat\.whatsapp\.com\/|wa\.me\//i.test(text)
+        if (groupSettings.antilink && isLink) {
+          const groupMeta = await sock.groupMetadata(from)
+          const isAdmin = groupMeta.participants.some(
+            p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
+          )
+          
+          if (!isAdmin && !owner) {
+            await reply(sock, from, "❌ Link terdeteksi, kamu akan dikeluarkan!", m)
+            await sock.sendMessage(from, { delete: m.key })
+            await sock.groupParticipantsUpdate(from, [senderJid], "remove")
+            return
+          }
+        }
+
+        // Anti-link Global
+         if (db.settings.antiLinkGlobal && isLink && !owner) {
+            await reply(sock, from, "❌ Link terdeteksi (Global Antilink)!", m)
+            await sock.sendMessage(from, { delete: m.key })
+            return
+         }
+
+         // Anti-spam Group
+         if (groupSettings.antispam) {
+           const key = `spam-${from}-${senderJid}`
+           const now = Date.now()
+           const userData = userMsgCount.get(key) || { count: 0, lastMsg: 0 }
+           
+           if (now - userData.lastMsg < 2000) { // 2 seconds
+             userData.count++
+           } else {
+             userData.count = 1
+           }
+           userData.lastMsg = now
+           userMsgCount.set(key, userData)
+           
+           if (userData.count > 5) {
+              const groupMeta = await sock.groupMetadata(from)
+              const isAdmin = groupMeta.participants.some(
+                p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
+              )
+              if (!isAdmin && !owner) {
+                await reply(sock, from, "❌ Spam terdeteksi, kamu akan dikeluarkan!", m)
+                await sock.groupParticipantsUpdate(from, [senderJid], "remove")
+                return
+              }
+           }
+         }
+        }
+ 
+        if (!text) return
+
+        let prefix = ""
+        const prefixes = db.settings.multiPrefix ? db.settings.prefixes : [config.prefix]
+        for (let p of prefixes) {
+          if (text.startsWith(p)) {
+            prefix = p
+            break
+          }
+        }
+
+        if (!prefix) return
+
+        log("RAW:", rawText)
+        log("TEXT:", text)
+        log("SENDER:", senderJid)
+        log("SENDER NUMBER:", senderNumber)
+        log("OWNER NUMBERS:", config.ownerNumbers)
+        log("OWNER JIDS:", config.ownerJids)
+
+        const body = text.slice(prefix.length).trim()
+        const parts = body.split(/\s+/)
+        let cmd = (parts[0] || "").toLowerCase()
+        const args = parts.slice(1)
+
+        // Command Alias
+        const aliases = {
+          "p": "ping",
+          "s": "sticker",
+          "m": "menu",
+          "u": "profile",
+          "lb": "leaderboard",
+          "bc": "bcuser",
+          "bcg": "bcgroup"
+        }
+        if (aliases[cmd]) cmd = aliases[cmd]
+
+        const now = Date.now()
+       if (cooldown.has(senderNumber)) {
+         const diff = now - cooldown.get(senderNumber)
+         if (diff < config.cooldownMs) return
+       }
+       cooldown.set(senderNumber, now)
+
+       const owner = isOwner(
+         senderJid,
+         senderNumber,
+         config.ownerNumbers,
+         config.ownerJids
+       )
+
+       log("IS OWNER:", owner)
+
+      // Auto delete command logic
+      if (isGroup && db.groups[from]?.autodelete) {
+        setTimeout(async () => {
+          try {
+            await sock.sendMessage(from, { delete: m.key })
+          } catch (e) {
+            console.error("Auto delete error:", e)
+          }
+        }, 5000)
+      }
 
       if (cmd === "menu") {
         return reply(sock, from, makeMenu(pushName), m)
@@ -262,31 +419,85 @@ async function startBot() {
           sock,
           from,
           `
-📊 SERVER STATS
+📊 *DETAIL SERVER STATS*
 
-🖥 Host: ${info.hostname}
-💻 Platform: ${info.platform}
-🧠 CPU: ${info.cpuModel}
-🔢 Core: ${info.cpuCores}
+🌐 *HOST INFO*
+• Host: ${info.hostname}
+• OS: ${info.platform}
+• Arch: ${info.arch}
+• Node: ${info.nodeVersion}
 
-📦 RAM Total: ${info.totalMem}
-📉 RAM Used: ${info.usedMem}
-📈 RAM Free: ${info.freeMem}
+🧠 *CPU & LOAD*
+• Model: ${info.cpuModel}
+• Core: ${info.cpuCores}
+• Load Avg: ${info.loadAvg}
 
-⚙️ Process RSS: ${info.processRss}
-🧪 Heap Used: ${info.processHeapUsed}
-🧱 Heap Total: ${info.processHeapTotal}
+📦 *RAM USAGE*
+• Total: ${info.totalMem}
+• Used: ${info.usedMem}
+• Free: ${info.freeMem}
+• Usage: ${info.memUsagePercent}
 
-⏱ Uptime: ${info.uptime}
+⚙️ *PROCESS MEMORY*
+• RSS: ${info.processRss}
+• Heap Used: ${info.processHeapUsed}
+• Heap Total: ${info.processHeapTotal}
+
+⏱ *UPTIME*
+• System: ${info.uptime}
 `.trim(),
           m
         )
+      }
+
+      // User System Commands
+      if (cmd === "profile" || cmd === "me") {
+        const target = getQuotedParticipant(m) || senderJid
+        const userData = db.users[target]
+
+        if (!userData) return reply(sock, from, "❌ User belum terdaftar di database", m)
+
+        const myOrders = db.orders.filter(o => String(o.user) === String(target.split("@")[0]))
+
+        return reply(
+          sock,
+          from,
+          `
+👤 *USER PROFILE*
+
+👤 Nama: ${userData.name}
+🔢 Nomor: @${target.split("@")[0]}
+🌟 Level: ${userData.level}
+✨ XP: ${userData.xp} / ${userData.level * 100}
+📦 Total Order: ${myOrders.length}
+👑 Status: ${isOwner(target, target.split("@")[0], config.ownerNumbers, config.ownerJids) ? "Owner" : "User"}
+`.trim(),
+          m
+        )
+      }
+
+      if (cmd === "leaderboard" || cmd === "lb") {
+        const sorted = Object.entries(db.users)
+          .sort(([, a], [, b]) => {
+            if (a.level !== b.level) return b.level - a.level
+            return b.xp - a.xp
+          })
+          .slice(0, 10)
+
+        let teks = "🏆 *LEADERBOARD TOP 10*\n\n"
+        sorted.forEach(([jid, data], i) => {
+          teks += `${i + 1}. ${data.name} (@${jid.split("@")[0]})\n`
+          teks += `   Level: ${data.level} | XP: ${data.xp}\n`
+        })
+
+        return reply(sock, from, teks.trim(), m)
       }
 
       if (cmd === "clearcache") {
         if (!owner) return reply(sock, from, "❌ Khusus owner", m)
 
         cooldown.clear()
+        userMsgCount.clear()
         const removed = clearTempFiles()
 
         if (global.gc) {
@@ -300,8 +511,58 @@ async function startBot() {
 🧹 Cache dibersihkan
 
 • Cooldown: reset
+• Spam Count: reset
 • Temp folder: ${removed.length ? removed.join(", ") : "tidak ada"}
 • Manual GC: ${global.gc ? "aktif" : "tidak aktif"}
+`.trim(),
+          m
+        )
+      }
+
+      // System Settings
+      if (cmd === "settings") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        const sub = (args[0] || "").toLowerCase()
+        if (sub === "antilinkglobal") {
+          db.settings.antiLinkGlobal = !db.settings.antiLinkGlobal
+          saveDB(config.dbFile, db)
+          return reply(sock, from, `✅ Anti Link Global: ${db.settings.antiLinkGlobal ? "ON" : "OFF"}`, m)
+        }
+        if (sub === "multiprefix") {
+          db.settings.multiPrefix = !db.settings.multiPrefix
+          saveDB(config.dbFile, db)
+          return reply(sock, from, `✅ Multi Prefix: ${db.settings.multiPrefix ? "ON" : "OFF"}`, m)
+        }
+        return reply(sock, from, "Gunakan:\n-settings antilinkglobal\n-settings multiprefix", m)
+      }
+
+      if (cmd === "backup") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        const buffer = fs.readFileSync(config.dbFile)
+        await sock.sendMessage(from, {
+          document: buffer,
+          mimetype: "application/json",
+          fileName: "db_backup.json"
+        }, { quoted: m })
+        return reply(sock, from, "✅ Database backup terkirim", m)
+      }
+
+      if (cmd === "groupanalytics" || cmd === "ganalytics") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        const groupMeta = await sock.groupMetadata(from)
+        const totalMembers = groupMeta.participants.length
+        const admins = groupMeta.participants.filter(p => p.admin).length
+        
+        return reply(
+          sock,
+          from,
+          `
+📊 *GROUP ANALYTICS*
+
+👥 Total Member: ${totalMembers}
+👮‍♂️ Total Admin: ${admins}
+📅 Dibuat: ${new Date(groupMeta.creation * 1000).toLocaleString()}
+📝 Deskripsi: ${groupMeta.desc || "-"}
 `.trim(),
           m
         )
@@ -319,13 +580,61 @@ async function startBot() {
         return
       }
 
+      // Broadcast Commands
+      if (cmd === "bcuser" || cmd === "bcgrup" || cmd === "bcgroup" || cmd === "bcpromo") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        const textOut = args.join(" ")
+        if (!textOut) return reply(sock, from, "❌ Masukkan teks", m)
+
+        let targets = []
+        if (cmd === "bcuser") {
+          targets = Object.keys(db.users)
+        } else {
+          targets = Object.keys(await sock.groupFetchAllParticipatingGroups())
+        }
+
+        const isPromo = cmd === "bcpromo"
+        const header = isPromo ? "📢 *PROMO SPESIAL*\n\n" : "📢 *BROADCAST*\n\n"
+        const footer = isPromo ? "\n\n🔥 *BURUAN ORDER SEBELUM KEHABISAN!*" : ""
+
+        await reply(sock, from, `🚀 Mengirim broadcast ke ${targets.length} target...`, m)
+
+        for (let t of targets) {
+          try {
+            await sock.sendMessage(t, { text: header + textOut + footer })
+            await new Promise(res => setTimeout(res, 1000))
+          } catch (e) {
+            console.error(`Gagal kirim ke ${t}:`, e)
+          }
+        }
+        return reply(sock, from, "✅ Broadcast selesai", m)
+      }
+
       if (cmd === "list") {
         const sub = (args[0] || "").toLowerCase()
 
         if (sub === "show") {
-        const textOut = formatProductList(db)
-        return reply(sock, from, `╭─❖ LIST PRODUK\n\n${textOut}\n╰─────────────`, m)
-      }
+          const textOut = formatProductList(db)
+          return reply(sock, from, `╭─❖ LIST PRODUK\n\n${textOut}\n╰─────────────`, m)
+        }
+
+        if (sub === "search") {
+          const query = args.slice(1).join(" ").trim().toLowerCase()
+          if (!query) return reply(sock, from, "❌ Masukkan kata kunci pencarian", m)
+
+          const hasil = db.list.filter(item =>
+            item.nama.toLowerCase().includes(query) ||
+            item.kategori.toLowerCase().includes(query)
+          )
+
+          if (!hasil.length) return reply(sock, from, "❌ Produk tidak ditemukan", m)
+
+          const textOut = hasil.map(item =>
+            `${item.id}. ${item.nama} - ${item.harga} (Stok: ${item.stock || 0})`
+          ).join("\n")
+
+          return reply(sock, from, `🔍 HASIL PENCARIAN "${query.toUpperCase()}"\n\n${textOut}`, m)
+        }
 
         if (sub === "kategori") {
           const kategori = args.slice(1).join(" ").trim().toLowerCase()
@@ -343,7 +652,7 @@ async function startBot() {
           }
 
           const textOut = hasil.map(item =>
-            `${item.id}. ${item.nama} - ${item.harga} (${item.status})`
+            `${item.id}. ${item.nama} - ${item.harga} (Stok: ${item.stock || 0})`
           ).join("\n")
 
           return reply(sock, from, `📂 KATEGORI ${kategori.toUpperCase()}\n\n${textOut}`, m)
@@ -355,16 +664,21 @@ async function startBot() {
           const raw = args.slice(1).join(" ")
           const data = raw.split("|")
 
-          if (data.length < 4) {
-            return reply(sock, from, "❌ Format: -list add Nama|Harga|Kategori|Status", m)
+          if (data.length < 5) {
+            return reply(sock, from, "❌ Format: -list add Nama|Harga|Kategori|Status|Stock", m)
           }
 
-          const [nama, hargaRaw, kategori, status] = data.map(x => x.trim())
+          const [nama, hargaRaw, kategori, status, stockRaw] = data.map(x => x.trim())
           const harga = Number(hargaRaw)
+          const stock = Number(stockRaw)
 
-          if (!nama || Number.isNaN(harga) || !kategori || !status) {
+          if (!nama || Number.isNaN(harga) || !kategori || !status || Number.isNaN(stock)) {
             return reply(sock, from, "❌ Data produk tidak valid", m)
           }
+
+          // Duplicate protection
+          const exists = db.list.some(item => item.nama.toLowerCase() === nama.toLowerCase())
+          if (exists) return reply(sock, from, `❌ Produk dengan nama "${nama}" sudah ada`, m)
 
           const newId = db.list.length
             ? Math.max(...db.list.map(x => Number(x.id) || 0)) + 1
@@ -375,7 +689,8 @@ async function startBot() {
             nama,
             harga,
             kategori,
-            status
+            status,
+            stock
           })
 
           saveDB(config.dbFile, db)
@@ -389,9 +704,41 @@ async function startBot() {
 📦 ${nama}
 💰 ${harga}
 🗂 ${kategori}
-📌 ${status}`,
+📌 ${status}
+📦 Stok: ${stock}`,
             m
           )
+        }
+
+        if (sub === "edit") {
+          if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+          const id = Number(args[1])
+          const raw = args.slice(2).join(" ")
+          const [key, value] = raw.split("=").map(x => x.trim())
+
+          if (Number.isNaN(id) || !key || !value) {
+            return reply(sock, from, "❌ Format: -list edit ID key=value\nContoh: -list edit 1 stock=10", m)
+          }
+
+          const index = db.list.findIndex(item => Number(item.id) === id)
+          if (index === -1) return reply(sock, from, "❌ Produk tidak ditemukan", m)
+
+          const validKeys = ["nama", "harga", "kategori", "status", "stock"]
+          if (!validKeys.includes(key.toLowerCase())) {
+            return reply(sock, from, `❌ Key tidak valid. Gunakan: ${validKeys.join(", ")}`, m)
+          }
+
+          let finalValue = value
+          if (key === "harga" || key === "stock") finalValue = Number(value)
+          if ((key === "harga" || key === "stock") && Number.isNaN(finalValue)) {
+            return reply(sock, from, `❌ ${key} harus angka`, m)
+          }
+
+          db.list[index][key] = finalValue
+          saveDB(config.dbFile, db)
+
+          return reply(sock, from, `✅ Produk ${id} diperbarui: ${key} = ${finalValue}`, m)
         }
 
         if (sub === "remove") {
@@ -417,7 +764,7 @@ async function startBot() {
         return reply(
           sock,
           from,
-          "Gunakan:\n-list show\n-list kategori AI\n-list add Nama|Harga|Kategori|Status\n-list remove ID",
+          "Gunakan:\n-list show\n-list search Nama\n-list kategori AI\n-list add Nama|Harga|Kategori|Status|Stock\n-list edit ID key=value\n-list remove ID",
           m
         )
       }
@@ -443,26 +790,39 @@ async function startBot() {
           return reply(sock, from, "❌ ID produk dan qty harus angka", m)
         }
 
-        const product = db.list.find(item => Number(item.id) === produkId)
-
-        if (!product) {
+        const productIndex = db.list.findIndex(item => Number(item.id) === produkId)
+        if (productIndex === -1) {
           return reply(sock, from, "❌ Produk tidak ditemukan. Ketik -list show", m)
+        }
+        
+        const product = db.list[productIndex]
+
+        // Check stock
+        if (product.stock < qty) {
+          return reply(sock, from, `❌ Stok tidak cukup. Stok saat ini: ${product.stock}`, m)
         }
 
         const id = createOrderId()
         const isoNow = new Date().toISOString()
+        const totalPrice = product.harga * qty
 
         db.orders.push({
           id,
           nama,
           produk: product.nama,
+          harga: product.harga,
+          total: totalPrice,
           qty,
           alamat,
           user: senderNumber,
           status: "pending",
+          notes: "",
           createdAt: isoNow,
           updatedAt: isoNow
         })
+
+        // Decrease stock
+        db.list[productIndex].stock -= qty
 
         saveDB(config.dbFile, db)
 
@@ -470,18 +830,83 @@ async function startBot() {
           sock,
           from,
           `
-✅ ORDER BERHASIL
+🧾 *INVOICE OTOMATIS*
 
 🆔 ID: ${id}
 👤 Nama: ${nama}
 📦 Produk: ${product.nama}
-💰 Harga: ${product.harga}
+💰 Harga Satuan: ${product.harga}
 🔢 Qty: ${qty}
+💵 Total: ${totalPrice}
 📍 Alamat: ${alamat}
 📌 Status: pending
+🕒 Tanggal: ${isoNow.split("T")[0]}
+
+Ketik *-cekorder ${id}* untuk melihat status.
 `.trim(),
           m
         )
+      }
+
+      if (cmd === "cancelorder") {
+        const id = args[0]
+        if (!id) return reply(sock, from, "❌ Masukkan ID order", m)
+
+        const orderIndex = db.orders.findIndex(o => o.id === id)
+        if (orderIndex === -1) return reply(sock, from, "❌ Order tidak ditemukan", m)
+        
+        const order = db.orders[orderIndex]
+        
+        // Only owner or the user who ordered can cancel
+        if (String(order.user) !== String(senderNumber) && !owner) {
+          return reply(sock, from, "❌ Kamu tidak bisa membatalkan order ini", m)
+        }
+
+        if (order.status !== "pending") {
+          return reply(sock, from, `❌ Order tidak bisa dibatalkan karena status: ${order.status}`, m)
+        }
+
+        db.orders[orderIndex].status = "cancelled"
+        db.orders[orderIndex].updatedAt = new Date().toISOString()
+        
+        // Restore stock
+        const productIndex = db.list.findIndex(p => p.nama === order.produk)
+        if (productIndex !== -1) {
+          db.list[productIndex].stock += order.qty
+        }
+
+        saveDB(config.dbFile, db)
+        return reply(sock, from, `✅ Order ${id} berhasil dibatalkan dan stok dikembalikan`, m)
+      }
+
+      if (cmd === "addnote") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        
+        const id = args[0]
+        const note = args.slice(1).join(" ")
+        
+        if (!id || !note) return reply(sock, from, "❌ Format: -addnote ID Catatan", m)
+        
+        const orderIndex = db.orders.findIndex(o => o.id === id)
+        if (orderIndex === -1) return reply(sock, from, "❌ Order tidak ditemukan", m)
+        
+        db.orders[orderIndex].notes = note
+        db.orders[orderIndex].updatedAt = new Date().toISOString()
+        
+        saveDB(config.dbFile, db)
+        return reply(sock, from, `✅ Catatan ditambahkan ke order ${id}`, m)
+      }
+
+      if (cmd === "process") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        const id = args[0]
+        if (!id) return reply(sock, from, "❌ Masukkan ID order", m)
+
+        const ok = updateOrderStatus(db, id, "process")
+        if (!ok) return reply(sock, from, "❌ Order tidak ditemukan", m)
+
+        saveDB(config.dbFile, db)
+        return reply(sock, from, `✅ Status order ${id} diubah ke PROCESS`, m)
       }
 
       if (cmd === "myorder") {
@@ -527,6 +952,7 @@ async function startBot() {
 🔢 Qty: ${order.qty}
 📍 ${order.alamat}
 📌 ${order.status}
+📝 Note: ${order.notes || "-"}
 🕒 Dibuat: ${order.createdAt}
 🕒 Diupdate: ${order.updatedAt}
 `.trim(),
@@ -553,6 +979,15 @@ async function startBot() {
 
         if (!ok) {
           return reply(sock, from, "❌ Order tidak ditemukan", m)
+        }
+
+        // If refund, restore stock
+        if (cmd === "refund") {
+          const order = db.orders.find(o => o.id === id)
+          const productIndex = db.list.findIndex(p => p.nama === order.produk)
+          if (productIndex !== -1) {
+            db.list[productIndex].stock += order.qty
+          }
         }
 
         saveDB(config.dbFile, db)
@@ -684,7 +1119,7 @@ async function startBot() {
           p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
         )
 
-        if (!isAdmin) return reply(sock, from, "❌ Khusus admin", m)
+        if (!isAdmin && !owner) return reply(sock, from, "❌ Khusus admin", m)
 
         const participants = groupMeta.participants
 
@@ -698,10 +1133,102 @@ async function startBot() {
           teks += `• @${p.id.split("@")[0]}\n`
         }
 
-        await sock.sendMessage(from, {
+        return await sock.sendMessage(from, {
           text: teks,
           mentions
         }, { quoted: m })
+      }
+
+      if (cmd === "tagadmin") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        const groupMeta = await sock.groupMetadata(from)
+        const admins = groupMeta.participants.filter(p => p.admin)
+        
+        let teks = "👮‍♂️ *PANGGILAN ADMIN*\n\n"
+        let mentions = []
+        for (let a of admins) {
+          mentions.push(a.id)
+          teks += `@${a.id.split("@")[0]}\n`
+        }
+        return await sock.sendMessage(from, { text: teks, mentions })
+      }
+
+      if (cmd === "kickall") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        
+        const groupMeta = await sock.groupMetadata(from)
+        const nonAdmins = groupMeta.participants.filter(p => !p.admin)
+        
+        await reply(sock, from, `🚀 Mengeluarkan ${nonAdmins.length} member non-admin...`, m)
+        
+        for (let p of nonAdmins) {
+          try {
+            await sock.groupParticipantsUpdate(from, [p.id], "remove")
+            await new Promise(res => setTimeout(res, 500))
+          } catch (e) {
+            console.error(`Gagal kick ${p.id}:`, e)
+          }
+        }
+        return reply(sock, from, "✅ Selesai", m)
+      }
+
+      // Security Grup Commands
+      if (["antilink", "welcome", "goodbye", "autodelete"].includes(cmd)) {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        const groupMeta = await sock.groupMetadata(from)
+        const isAdmin = groupMeta.participants.some(
+          p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
+        )
+        if (!isAdmin && !owner) return reply(sock, from, "❌ Khusus admin", m)
+
+        const sub = (args[0] || "").toLowerCase()
+        if (sub !== "on" && sub !== "off") return reply(sock, from, `Gunakan: -${cmd} on/off`, m)
+
+        if (!db.groups[from]) db.groups[from] = {}
+        db.groups[from][cmd] = (sub === "on")
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, `✅ ${cmd.toUpperCase()} diubah ke ${sub.toUpperCase()}`, m)
+      }
+
+      if (cmd === "setwelcome" || cmd === "setgoodbye") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        const groupMeta = await sock.groupMetadata(from)
+        const isAdmin = groupMeta.participants.some(
+          p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
+        )
+        if (!isAdmin && !owner) return reply(sock, from, "❌ Khusus admin", m)
+
+        const textOut = args.join(" ")
+         if (!textOut) return reply(sock, from, `Gunakan: -${cmd} teks`, m)
+
+        if (!db.groups[from]) db.groups[from] = {}
+        const key = cmd === "setwelcome" ? "welcomeMsg" : "goodbyeMsg"
+        db.groups[from][key] = textOut
+        saveDB(config.dbFile, db)
+
+        return reply(sock, from, `✅ Teks ${cmd.replace("set", "")} berhasil diatur`, m)
+      }
+
+      if (cmd === "lock") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
+        const groupMeta = await sock.groupMetadata(from)
+        const isAdmin = groupMeta.participants.some(
+          p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
+        )
+        if (!isAdmin && !owner) return reply(sock, from, "❌ Khusus admin", m)
+
+        const sub = (args[0] || "").toLowerCase()
+        if (sub === "on") {
+          await sock.groupSettingUpdate(from, "locked")
+          return reply(sock, from, "✅ Grup terkunci (hanya admin bisa edit info)", m)
+        } else if (sub === "off") {
+          await sock.groupSettingUpdate(from, "unlocked")
+          return reply(sock, from, "✅ Grup terbuka (semua bisa edit info)", m)
+        } else {
+          return reply(sock, from, "Gunakan: -lock on/off", m)
+        }
       }
 
       return reply(sock, from, "❓ Command tidak dikenal. Ketik -menu", m)

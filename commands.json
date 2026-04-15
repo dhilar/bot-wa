@@ -4,33 +4,51 @@
     "-ping",
     "-runtime",
     "-owner",
-    "-s",
-    "-stiker",
-    "-sticker"
+    "-s / -sticker",
+    "-profile / -me",
+    "-leaderboard / -lb"
   ],
   "produk": [
     "-list show",
-    "-list kategori AI",
-    "-list kategori Streaming"
+    "-list search <nama>",
+    "-list kategori <nama>"
   ],
   "order": [
-    "-order nama,idproduk,qty,alamat",
+    "-order nama,id,qty,alamat",
     "-myorder",
-    "-cekorder ID"
+    "-cekorder ID",
+    "-cancelorder ID"
   ],
   "owner": [
-    "-list add Nama|Harga|Kategori|Status",
+    "-list add N|H|K|S|Stok",
+    "-list edit ID k=v",
     "-list remove ID",
-    "-done ID",
-    "-fail ID",
-    "-refund ID",
+    "-done / -fail / -refund ID",
+    "-process ID",
+    "-addnote ID <teks>",
+    "-bcuser <teks>",
+    "-bcgroup <teks>",
+    "-bcpromo <teks>",
+    "-backup",
+    "-settings <key>",
+    "-kickall",
     "-stats",
     "-clearcache",
     "-restart"
   ],
   "group": [
-    "-open",
-    "-close",
-    "-kick (reply target)"
+    "-open / -close",
+    "-kick (reply)",
+    "-antilink on/off",
+    "-antispam on/off",
+    "-welcome on/off",
+    "-goodbye on/off",
+    "-autodelete on/off",
+    "-setwelcome <teks>",
+    "-setgoodbye <teks>",
+    "-lock on/off",
+    "-tagall",
+    "-tagadmin",
+    "-ganalytics"
   ]
 }
