@@ -558,7 +558,7 @@ async function startBot() {
         }
 
         // Trigger "menu" atau "produk" tanpa prefix (tunggal)
-        if (!prefix && /^(menu|produk|pay|payment|pembayaran)$/i.test(text)) {
+        if (!prefix && /^(menu|produk|pay|payment|pembayaran|list)$/i.test(text)) {
           prefix = "" // No prefix needed
         } else if (!prefix) {
           return
@@ -875,10 +875,72 @@ async function startBot() {
       }
 
       // Broadcast Commands
+      if (cmd === "pushcontact") {
+        if (!isGroup) return reply(sock, from, "❌ Hanya bisa di grup", m)
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+
+        // Format: -pushcontact delay|pesan {opsi1|opsi2}
+        const rawText = args.join(" ")
+        if (!rawText || !rawText.includes("|")) {
+          return reply(sock, from, "❌ Format salah!\nGunakan: `-pushcontact delay|Pesan Anda` atau `-pushcontact 20|Halo {kak|bang|teman}!`", m)
+        }
+
+        const [delayRaw, ...messageParts] = rawText.split("|")
+        const delaySeconds = Number(delayRaw.trim())
+        const messageTemplate = messageParts.join("|").trim()
+
+        if (isNaN(delaySeconds) || delaySeconds < 10) {
+          return reply(sock, from, "❌ Delay minimal 10 detik agar aman dari ban!", m)
+        }
+
+        const groupMeta = await sock.groupMetadata(from)
+        const participants = groupMeta.participants.map(p => p.id).filter(jid => jid !== sock.user.id && jid !== senderJid)
+
+        await reply(sock, from, `🚀 *PUSH CONTACT DIMULAI*\n\n👥 Target: ${participants.length} member\n⏳ Jeda: ${delaySeconds} detik\n🛡️ Mode: Anti-Detection (Jitter + Spin-tax)`, m)
+
+        // Helper Spin-tax {halo|hi|p}
+        const parseSpintax = (text) => {
+          return text.replace(/{([^{}]+)}/g, (match, options) => {
+            const choices = options.split("|")
+            return choices[Math.floor(Math.random() * choices.length)]
+          })
+        }
+
+        let success = 0
+        let fail = 0
+
+        for (let jid of participants) {
+          try {
+            const finalMessage = parseSpintax(messageTemplate)
+            await sock.sendMessage(jid, { text: finalMessage })
+            success++
+            
+            // Anti-detection: Jitter (acak tambahan 2-5 detik)
+            const jitter = Math.floor(Math.random() * 5000) + 2000
+            await new Promise(res => setTimeout(res, (delaySeconds * 1000) + jitter))
+          } catch (e) {
+            console.error(`Gagal push ke ${jid}:`, e)
+            fail++
+          }
+        }
+
+        return reply(sock, from, `✅ *PUSH CONTACT SELESAI*\n\n🚀 Berhasil: ${success}\n❌ Gagal: ${fail}`, m)
+      }
+
       if (cmd === "bcuser" || cmd === "bcgrup" || cmd === "bcgroup" || cmd === "bcpromo") {
         if (!owner) return reply(sock, from, "❌ Khusus owner", m)
-        const textOut = args.join(" ")
-        if (!textOut) return reply(sock, from, "❌ Masukkan teks", m)
+        
+        // Cek apakah ada parameter delay di awal (misal: -bcgroup 10 Teks Pesan)
+        let delaySeconds = 8 // Default 8 detik
+        let messageStartIndex = 0
+        
+        if (!isNaN(args[0]) && Number(args[0]) > 0) {
+          delaySeconds = Number(args[0])
+          messageStartIndex = 1
+        }
+
+        const textOut = args.slice(messageStartIndex).join(" ")
+        if (!textOut) return reply(sock, from, `❌ Masukkan teks\n\nContoh dengan delay custom:\n-${cmd} 15 Halo semuanya\n(Artinya kirim tiap 15 detik)`, m)
 
         let targets = []
         if (cmd === "bcuser") {
@@ -892,12 +954,14 @@ async function startBot() {
         const header = isPromo ? "📢 *PROMO SPESIAL*\n\n" : "📢 *BROADCAST*\n\n"
         const footer = isPromo ? "\n\n🔥 *BURUAN ORDER SEBELUM KEHABISAN!*" : ""
 
-        await reply(sock, from, `🚀 Mengirim broadcast ke ${targets.length} target...`, m)
+        await reply(sock, from, `🚀 Mengirim broadcast ke ${targets.length} target dengan jeda ${delaySeconds} detik...`, m)
 
         for (let t of targets) {
           try {
             await sock.sendMessage(t, { text: header + textOut + footer })
-            await new Promise(res => setTimeout(res, 8000))
+            // Tambahkan sedikit variasi acak (+/- 1-2 detik) agar tidak terlalu robotik
+            const jitter = Math.floor(Math.random() * 3000) 
+            await new Promise(res => setTimeout(res, (delaySeconds * 1000) + jitter))
           } catch (e) {
             console.error(`Gagal kirim ke ${t}:`, e)
           }
@@ -1094,6 +1158,22 @@ Ketik: \`-order ${pushName},${item.id},1,-\`
 
           saveDB(config.dbFile, db)
           return reply(sock, from, `🗑 Produk dengan ID ${id} dihapus`, m)
+        }
+
+        if (!sub) {
+          if (!db.list.length) return reply(sock, from, "📭 *List produk kosong*", m)
+          
+          let simpleList = "🛒 *DAFTAR PRODUK SINGKAT*\n\n"
+          db.list.forEach(item => {
+            simpleList += `• [${item.id}] ${item.nama}\n`
+          })
+          simpleList += "\n_Ketik `-list info <id>` untuk detail_"
+          
+          if (owner) {
+            simpleList += "\n\n👮‍♂️ *ADMIN MENU:* \n-list add, -list edit, -list remove"
+          }
+          
+          return reply(sock, from, simpleList, m)
         }
 
         return reply(

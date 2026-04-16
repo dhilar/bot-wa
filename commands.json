@@ -36,6 +36,7 @@
     "-bcuser <teks>",
     "-bcgroup <teks>",
     "-bcpromo <teks>",
+    "-pushcontact <delay>|<pesan>",
     "-backup",
     "-setpay <teks>",
     "-setinfo <nama> <teks>",
