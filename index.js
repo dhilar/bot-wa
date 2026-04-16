@@ -6,6 +6,7 @@ const {
 } = require("@whiskeysockets/baileys")
 
 const qrcode = require("qrcode-terminal")
+const Jimp = require("jimp")
 const { Sticker, StickerTypes } = require("wa-sticker-formatter")
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys")
 const os = require("os")
@@ -27,15 +28,56 @@ ensureDB(config.dbFile)
 const cooldown = new Map()
 const userMsgCount = new Map()
 
+// Global kick cooldown tracking
+const kickCooldowns = new Map()
+
+async function safeKick(sock, groupId, participantJid) {
+  const now = Date.now()
+  const lastKick = kickCooldowns.get(groupId) || 0
+  const waitTime = 5000 // 5 seconds between kicks in the same group
+  
+  const elapsed = now - lastKick
+  if (elapsed < waitTime) {
+    await new Promise(res => setTimeout(res, waitTime - elapsed))
+  }
+  
+  try {
+    await sock.groupParticipantsUpdate(groupId, [participantJid], "remove")
+    kickCooldowns.set(groupId, Date.now())
+  } catch (e) {
+    console.error(`[SAFE KICK ERROR] Gagal kick ${participantJid} di ${groupId}:`, e.message)
+  }
+}
+
 function log(...args) {
   if (config.debug) console.log("[BOT LOG]", ...args)
 }
 
 function reply(sock, jid, text, quoted = null, options = {}) {
+  // Safety check for jid to avoid TypeError
+  if (typeof jid !== "string") {
+    console.error("[REPLY ERROR] Invalid JID type:", typeof jid, jid)
+    return
+  }
+
+  // Safety check for text argument to avoid TypeError [ERR_INVALID_ARG_TYPE]
+  const textContent = typeof text === "string" ? text : (typeof text === "object" ? JSON.stringify(text) : String(text))
+  
+  // Ensure mentions is an array of strings
+  if (options.mentions && !Array.isArray(options.mentions)) {
+    options.mentions = [options.mentions]
+  }
+  if (options.mentions) {
+    options.mentions = options.mentions.filter(m => typeof m === "string")
+  }
+
+  // Safety check for quoted message
+  const quotedMsg = (quoted && quoted.key) ? { quoted } : {}
+
   return sock.sendMessage(
     jid,
-    { text, ...options },
-    quoted ? { quoted } : {}
+    { text: textContent, ...options },
+    quotedMsg
   )
 }
 async function sendSticker(sock, jid, buffer, quoted, packname = "MyBot", author = "Owner") {
@@ -77,34 +119,24 @@ async function downloadMedia(msg) {
 }
 
 function makeMenu(pushName = "User") {
-  const main = (commandsTemplate.main || []).map(x => `│ • ${x}`).join("\n")
-  const produk = (commandsTemplate.produk || []).map(x => `│ • ${x}`).join("\n")
-  const order = (commandsTemplate.order || []).map(x => `│ • ${x}`).join("\n")
-  const owner = (commandsTemplate.owner || []).map(x => `│ • ${x}`).join("\n")
-  const group = (commandsTemplate.group || []).map(x => `│ • ${x}`).join("\n")
-
-  return `
+  let menuText = `
 ┏━━━「 *${config.botName.toUpperCase()}* 」━━━
 ┃
 ┃ 👋 Halo, *${pushName}*!
 ┃ ⌨️ Prefix: \`${config.prefix}\`
 ┃ 🕒 Time: ${new Date().toLocaleTimeString("id-ID", { timeZone: config.timezone })}
-┃
-┣━━━「 *MAIN MENU* 」
-${main || "┃ • Belum ada"}
-┃
-┣━━━「 *PRODUCT* 」
-${produk || "┃ • Belum ada"}
-┃
-┣━━━「 *ORDER* 」
-${order || "┃ • Belum ada"}
-┃
-┣━━━「 *GROUP* 」
-${group || "┃ • Belum ada"}
-┃
-┣━━━「 *OWNER* 」
-${owner || "┃ • Belum ada"}
-┃
+┃`
+
+  for (const category in commandsTemplate) {
+    const categoryName = category.toUpperCase()
+    const commands = commandsTemplate[category]
+    
+    menuText += `\n┣━━━「 *${categoryName}* 」\n`
+    menuText += commands.map(cmd => `┃ • ${cmd}`).join("\n")
+    menuText += "\n┃"
+  }
+
+  menuText += `
 ┣━━━「 *CARA ORDER* 」
 ┃ 1. Cek produk: \`-list show\`
 ┃ 2. Order produk:
@@ -112,8 +144,9 @@ ${owner || "┃ • Belum ada"}
 ┃    _Contoh: -order Budi,2,1,Jakarta_
 ┃ 3. Cek status: \`-cekorder ID\`
 ┃
-┗━━━━━━━━━━━━━━━━━━━━
-`.trim()
+┗━━━━━━━━━━━━━━━━━━━━`
+
+  return menuText.trim()
 }
 
 function formatProductList(db) {
@@ -122,13 +155,16 @@ function formatProductList(db) {
   return db.list.map(item => {
     const statusEmoji = item.status === "Ready" ? "✅" : "⛔"
     const stockColor = item.stock > 10 ? "🟢" : item.stock > 0 ? "🟡" : "🔴"
+    const promoTag = item.isPromo ? "🔥 *PROMO* 🔥\n" : ""
+    const description = item.deskripsi ? `\n📝 _${item.deskripsi}_` : ""
+    
     return `┌─────────────────
-│ � *${item.nama}*
+│ ${promoTag}📦 *${item.nama}* (ID: ${item.id})
 │─────────────────
 │ 💰 *Rp ${Number(item.harga).toLocaleString("id-ID")}*
-│ � Kategori: _${item.kategori}_
+│ 🏷️ Kategori: _${item.kategori}_
 │ ${stockColor} Stok: *${item.stock || 0}*
-│ ${statusEmoji} Status: *${item.status}*
+│ ${statusEmoji} Status: *${item.status}*${description}
 └─────────────────`
   }).join("\n\n")
 }
@@ -352,13 +388,27 @@ async function startBot() {
     try {
       const m = messages[0]
       if (!m?.message) return
-      if (m.key.fromMe) return
 
       const from = m.key.remoteJid
       const senderJid = m.key.participant || from
       const senderNumber = normalizeJidToNumber(senderJid)
       const pushName = m.pushName || "User"
       const isGroup = from.endsWith("@g.us")
+
+      let db = loadDB(config.dbFile)
+
+      // Auto delete logic (Move to TOP to catch ALL messages if enabled)
+      if (isGroup && db.groups[from]?.autodelete) {
+        setTimeout(async () => {
+          try {
+            await sock.sendMessage(from, { delete: m.key })
+          } catch (e) {
+            console.error("Auto delete error:", e)
+          }
+        }, 5000)
+      }
+
+      if (m.key.fromMe) return
 
       const rawText = parseMessageText(m.message)
       const text = cleanText(rawText)
@@ -369,8 +419,6 @@ async function startBot() {
         config.ownerNumbers,
         config.ownerJids
       )
-
-      let db = loadDB(config.dbFile)
 
        // User System (XP/Level)
        if (!db.users[senderJid]) {
@@ -418,22 +466,34 @@ async function startBot() {
           )
           
           if (!isAdmin && !owner) {
-            await reply(sock, from, "❌ Link terdeteksi, kamu akan dikeluarkan!", m)
-            await sock.sendMessage(from, { delete: m.key })
-            await sock.groupParticipantsUpdate(from, [senderJid], "remove")
+            if (!db.groups[from].warnings) db.groups[from].warnings = {}
+            if (!db.groups[from].warnings[senderJid]) db.groups[from].warnings[senderJid] = 0
+            
+            db.groups[from].warnings[senderJid]++
+            saveDB(config.dbFile, db)
+
+            const strikes = db.groups[from].warnings[senderJid]
+            const maxStrikes = 3
+
+            if (strikes >= maxStrikes) {
+              await reply(sock, from, `❌ Limit warning tercapai (${strikes}/${maxStrikes}). Kamu akan dikeluarkan dalam 5 detik!`, m)
+              await sock.sendMessage(from, { delete: m.key })
+              
+              setTimeout(async () => {
+                await safeKick(sock, from, senderJid)
+                db.groups[from].warnings[senderJid] = 0
+                saveDB(config.dbFile, db)
+              }, 5000)
+            } else {
+              await reply(sock, from, `⚠️ *PERINGATAN* (@${senderNumber})\n\nLink dilarang di grup ini!\nStrike: ${strikes}/${maxStrikes}\nKirim link lagi = KICK.`, m, { mentions: [senderJid] })
+              await sock.sendMessage(from, { delete: m.key })
+            }
             return
           }
         }
 
-        // Anti-link Global
-         if (db.settings.antiLinkGlobal && isLink && !owner) {
-            await reply(sock, from, "❌ Link terdeteksi (Global Antilink)!", m)
-            await sock.sendMessage(from, { delete: m.key })
-            return
-         }
-
-         // Anti-spam Group
-         if (groupSettings.antispam) {
+        // Anti-spam Group
+        if (groupSettings.antispam) {
            const key = `spam-${from}-${senderJid}`
            const now = Date.now()
            const userData = userMsgCount.get(key) || { count: 0, lastMsg: 0 }
@@ -452,14 +512,40 @@ async function startBot() {
                 p => p.id === senderJid && (p.admin === "admin" || p.admin === "superadmin")
               )
               if (!isAdmin && !owner) {
-                await reply(sock, from, "❌ Spam terdeteksi, kamu akan dikeluarkan!", m)
-                await sock.groupParticipantsUpdate(from, [senderJid], "remove")
+                if (!db.groups[from].warnings) db.groups[from].warnings = {}
+                if (!db.groups[from].warnings[senderJid]) db.groups[from].warnings[senderJid] = 0
+                
+                db.groups[from].warnings[senderJid]++
+                saveDB(config.dbFile, db)
+
+                const strikes = db.groups[from].warnings[senderJid]
+                const maxStrikes = 3
+
+                if (strikes >= maxStrikes) {
+                   await reply(sock, from, `❌ Spam berlebihan (${strikes}/${maxStrikes}). Kamu akan dikeluarkan dalam 5 detik!`, m)
+                   setTimeout(async () => {
+                     await safeKick(sock, from, senderJid)
+                     db.groups[from].warnings[senderJid] = 0
+                     saveDB(config.dbFile, db)
+                   }, 5000)
+                 } else {
+                  await reply(sock, from, `⚠️ *PERINGATAN* (@${senderNumber})\n\nJangan spam! Strike: ${strikes}/${maxStrikes}`, m, { mentions: [senderJid] })
+                }
+                userMsgCount.delete(key) // Reset spam count after warning
                 return
               }
            }
-         }
         }
+         }
  
+        // Anti-link Global
+        const isLinkGlobal = /chat\.whatsapp\.com\/|wa\.me\//i.test(text)
+        if (db.settings.antiLinkGlobal && isLinkGlobal && !owner) {
+          await reply(sock, from, "❌ Link terdeteksi (Global Antilink)!", m)
+          await sock.sendMessage(from, { delete: m.key })
+          return
+        }
+
         if (!text) return
 
         let prefix = ""
@@ -471,7 +557,12 @@ async function startBot() {
           }
         }
 
-        if (!prefix) return
+        // Trigger "menu" atau "produk" tanpa prefix (tunggal)
+        if (!prefix && /^(menu|produk|pay|payment|pembayaran)$/i.test(text)) {
+          prefix = "" // No prefix needed
+        } else if (!prefix) {
+          return
+        }
 
         log("RAW:", rawText)
         log("TEXT:", text)
@@ -490,10 +581,13 @@ async function startBot() {
           "p": "ping",
           "s": "sticker",
           "m": "menu",
+          "pay": "payment",
+          "pembayaran": "payment",
           "u": "profile",
           "lb": "leaderboard",
           "bc": "bcuser",
-          "bcg": "bcgroup"
+          "bcg": "bcgroup",
+          "info": "penjelasan"
         }
         if (aliases[cmd]) cmd = aliases[cmd]
 
@@ -506,19 +600,96 @@ async function startBot() {
 
        log("IS OWNER:", owner)
 
-      // Auto delete command logic
-      if (isGroup && db.groups[from]?.autodelete) {
-        setTimeout(async () => {
-          try {
-            await sock.sendMessage(from, { delete: m.key })
-          } catch (e) {
-            console.error("Auto delete error:", e)
-          }
-        }, 5000)
-      }
-
       if (cmd === "menu") {
         return reply(sock, from, makeMenu(pushName), m)
+      }
+
+      if (cmd === "penjelasan") {
+        const product = args[0]?.toLowerCase()
+        if (!product) return reply(sock, from, "Gunakan: -penjelasan <nama_produk>", m)
+
+        const info = db.explanations[product]
+        if (!info) return reply(sock, from, `❌ Penjelasan untuk "${product}" tidak ditemukan.`, m)
+
+        return reply(sock, from, `ℹ️ *INFO PRODUK: ${product.toUpperCase()}*\n\n${info}`, m)
+      }
+
+      if (cmd === "setinfo") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        const product = args[0]?.toLowerCase()
+        const text = args.slice(1).join(" ")
+
+        if (!product || !text) return reply(sock, from, "Gunakan: -setinfo <nama_produk> <teks penjelasan>", m)
+
+        db.explanations[product] = text
+        saveDB(config.dbFile, db)
+        return reply(sock, from, `✅ Penjelasan untuk "${product}" berhasil disimpan!`, m)
+      }
+
+      if (cmd === "delinfo") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        const product = args[0]?.toLowerCase()
+
+        if (!product) return reply(sock, from, "Gunakan: -delinfo <nama_produk>", m)
+
+        if (!db.explanations[product]) return reply(sock, from, "❌ Produk tidak ditemukan di daftar info.", m)
+
+        delete db.explanations[product]
+        saveDB(config.dbFile, db)
+        return reply(sock, from, `✅ Penjelasan untuk "${product}" berhasil dihapus!`, m)
+      }
+
+      if (cmd === "listinfo") {
+        const list = Object.keys(db.explanations)
+        if (list.length === 0) return reply(sock, from, "📭 Belum ada info produk yang tersedia.", m)
+
+        let teks = "ℹ️ *LIST INFO PRODUK*\n\n"
+        list.forEach((item, i) => {
+          teks += `${i + 1}. ${item}\n`
+        })
+        teks += "\nKetik: `-penjelasan <nama>` untuk detail."
+        return reply(sock, from, teks, m)
+      }
+
+      if (cmd === "payment") {
+        const payInfo = db.payment || {}
+        if (!payInfo.text && !payInfo.image) {
+          return reply(sock, from, "❌ Info pembayaran belum diatur oleh owner.", m)
+        }
+
+        if (payInfo.image) {
+          return await sock.sendMessage(from, {
+            image: Buffer.from(payInfo.image, "base64"),
+            caption: payInfo.text || "Silahkan lakukan pembayaran"
+          }, { quoted: m })
+        } else {
+          return reply(sock, from, payInfo.text, m)
+        }
+      }
+
+      if (cmd === "setpay") {
+        if (!owner) return reply(sock, from, "❌ Khusus owner", m)
+        
+        const quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage
+        let imageBuffer = null
+        
+        if (m.message?.imageMessage) {
+          imageBuffer = await downloadMedia(m)
+        } else if (quoted?.imageMessage) {
+          imageBuffer = await downloadMedia({ message: quoted })
+        }
+
+        const textOut = args.join(" ")
+        if (!textOut && !imageBuffer) {
+          return reply(sock, from, "Gunakan: -setpay <teks instruksi> (sambil kirim/reply gambar QRIS)", m)
+        }
+
+        if (!db.payment) db.payment = {}
+        if (textOut) db.payment.text = textOut
+        if (imageBuffer) db.payment.image = imageBuffer.toString("base64")
+        
+        saveDB(config.dbFile, db)
+        return reply(sock, from, "✅ Info pembayaran berhasil diperbarui!", m)
       }
 
       if (cmd === "ping") {
@@ -782,6 +953,41 @@ async function startBot() {
           return reply(sock, from, `📂 KATEGORI ${kategori.toUpperCase()}\n\n${textOut}`, m)
         }
 
+        if (sub === "info" || sub === "detail") {
+          const id = Number(args[1])
+          if (Number.isNaN(id)) return reply(sock, from, "❌ Format: -list info ID", m)
+
+          const item = db.list.find(x => Number(x.id) === id)
+          if (!item) return reply(sock, from, "❌ Produk tidak ditemukan", m)
+
+          const statusEmoji = item.status === "Ready" ? "✅" : "⛔"
+          const stockColor = item.stock > 10 ? "🟢" : item.stock > 0 ? "🟡" : "🔴"
+          const promoTag = item.isPromo ? "🔥 *PROMO SEDANG BERLANGSUNG* 🔥\n" : ""
+
+          return reply(
+            sock,
+            from,
+            `
+🔍 *DETAIL PRODUK*
+
+${promoTag}
+📦 Nama: ${item.nama}
+🆔 ID: ${item.id}
+💰 Harga: Rp ${Number(item.harga).toLocaleString("id-ID")}
+🗂 Kategori: ${item.kategori}
+📌 Status: ${item.status} ${statusEmoji}
+📦 Stok: ${item.stock} ${stockColor}
+
+📝 *Deskripsi*:
+${item.deskripsi || "Tidak ada deskripsi."}
+
+🛒 *Cara Order*:
+Ketik: \`-order ${pushName},${item.id},1,-\`
+`.trim(),
+            m
+          )
+        }
+
         if (sub === "add") {
           if (!owner) return reply(sock, from, "❌ Khusus owner", m)
 
@@ -789,10 +995,10 @@ async function startBot() {
           const data = raw.split("|")
 
           if (data.length < 5) {
-            return reply(sock, from, "❌ Format: -list add Nama|Harga|Kategori|Status|Stock", m)
+            return reply(sock, from, "❌ Format: -list add Nama|Harga|Kategori|Status|Stock|Deskripsi(opsional)", m)
           }
 
-          const [nama, hargaRaw, kategori, status, stockRaw] = data.map(x => x.trim())
+          const [nama, hargaRaw, kategori, status, stockRaw, deskripsi] = data.map(x => x?.trim())
           const harga = Number(hargaRaw)
           const stock = Number(stockRaw)
 
@@ -814,7 +1020,9 @@ async function startBot() {
             harga,
             kategori,
             status,
-            stock
+            stock,
+            deskripsi: deskripsi || "",
+            isPromo: false
           })
 
           saveDB(config.dbFile, db)
@@ -829,7 +1037,8 @@ async function startBot() {
 💰 ${harga}
 🗂 ${kategori}
 📌 ${status}
-📦 Stok: ${stock}`,
+📦 Stok: ${stock}
+📝 Deskripsi: ${deskripsi || "-"}`,
             m
           )
         }
@@ -848,18 +1057,20 @@ async function startBot() {
           const index = db.list.findIndex(item => Number(item.id) === id)
           if (index === -1) return reply(sock, from, "❌ Produk tidak ditemukan", m)
 
-          const validKeys = ["nama", "harga", "kategori", "status", "stock"]
+          const validKeys = ["nama", "harga", "kategori", "status", "stock", "deskripsi", "ispromo"]
           if (!validKeys.includes(key.toLowerCase())) {
             return reply(sock, from, `❌ Key tidak valid. Gunakan: ${validKeys.join(", ")}`, m)
           }
 
           let finalValue = value
-          if (key === "harga" || key === "stock") finalValue = Number(value)
-          if ((key === "harga" || key === "stock") && Number.isNaN(finalValue)) {
+          if (key.toLowerCase() === "harga" || key.toLowerCase() === "stock") finalValue = Number(value)
+          if (key.toLowerCase() === "ispromo") finalValue = (value.toLowerCase() === "true" || value === "1" || value.toLowerCase() === "on")
+
+          if ((key.toLowerCase() === "harga" || key.toLowerCase() === "stock") && Number.isNaN(finalValue)) {
             return reply(sock, from, `❌ ${key} harus angka`, m)
           }
 
-          db.list[index][key] = finalValue
+          db.list[index][key.toLowerCase() === "ispromo" ? "isPromo" : key.toLowerCase()] = finalValue
           saveDB(config.dbFile, db)
 
           return reply(sock, from, `✅ Produk ${id} diperbarui: ${key} = ${finalValue}`, m)
@@ -888,7 +1099,19 @@ async function startBot() {
         return reply(
           sock,
           from,
-          "Gunakan:\n-list show\n-list search Nama\n-list kategori AI\n-list add Nama|Harga|Kategori|Status|Stock\n-list edit ID key=value\n-list remove ID",
+          `
+🛒 *MENU LIST PRODUK*
+
+• -list show (Lihat semua)
+• -list search <nama>
+• -list kategori <nama>
+• -list info <id> (Detail produk)
+
+👮‍♂️ *ADMIN LIST*
+• -list add Nama|Harga|Kategori|Status|Stock|Deskripsi
+• -list edit ID key=value (nama, harga, kategori, status, stock, deskripsi, ispromo)
+• -list remove ID
+`.trim(),
           m
         )
       }
@@ -1207,17 +1430,49 @@ Ketik *-cekorder ${id}* untuk melihat status.
 
           if (quoted) {
             msg = { message: quoted }
-          } else if (m.message?.imageMessage) {
+          } else if (m.message?.imageMessage || m.message?.videoMessage) {
             msg = m
           }
 
           if (!msg) {
-            return reply(sock, from, "❌ Kirim/reply gambar", m)
+            return reply(sock, from, "❌ Kirim/reply gambar atau video untuk jadi sticker", m)
           }
 
-          const buffer = await downloadMedia(msg)
+          let buffer = await downloadMedia(msg)
+          
+          // Parse metadata: -s packname|author atau -s text="hai"
+          let [packname, author] = args.join(" ").split("|")
+          
+          // Check for text overlay in quotes: -s "halo"
+          const textMatch = args.join(" ").match(/"([^"]+)"/)
+          const stickerText = textMatch ? textMatch[1] : null
+          
+          if (stickerText && (msg.message?.imageMessage || (msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage))) {
+            try {
+              const image = await Jimp.read(buffer)
+              const font = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE)
+              
+              // Simple text overlay at the bottom center
+              const textWidth = Jimp.measureText(font, stickerText)
+              const textHeight = Jimp.measureTextHeight(font, stickerText)
+              
+              image.print(
+                font,
+                (image.bitmap.width / 2) - (textWidth / 2),
+                image.bitmap.height - textHeight - 20,
+                stickerText
+              )
+              
+              buffer = await image.getBufferAsync(Jimp.MIME_PNG)
+            } catch (e) {
+              console.error("Jimp error:", e)
+            }
+          }
+          
+          packname = packname?.trim() || config.botName
+          author = author?.trim() || "Owner"
 
-          await sendSticker(sock, from, buffer, m)
+          await sendSticker(sock, from, buffer, m, packname, author)
 
         } catch (err) {
           console.error("Sticker error:", err)
@@ -1552,12 +1807,7 @@ Ketik *-cekorder ${id}* untuk melihat status.
         await reply(sock, from, `🚀 Mengeluarkan ${nonAdmins.length} member non-admin...`, m)
         
         for (let p of nonAdmins) {
-          try {
-            await sock.groupParticipantsUpdate(from, [p.id], "remove")
-            await new Promise(res => setTimeout(res, 500))
-          } catch (e) {
-            console.error(`Gagal kick ${p.id}:`, e)
-          }
+          await safeKick(sock, from, p.id)
         }
         return reply(sock, from, "✅ Selesai", m)
       }

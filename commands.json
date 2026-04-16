@@ -4,12 +4,19 @@
     "-ping",
     "-runtime",
     "-owner",
-    "-s / -sticker",
+    "-s / -sticker <pack|author>",
     "-profile / -me",
     "-leaderboard / -lb"
   ],
+  "info & payment": [
+    "-pay / -payment",
+    "-info / -penjelasan <nama>",
+    "-listinfo",
+    "• Trigger: menu, produk, pay"
+  ],
   "produk": [
     "-list show",
+    "-list info <id>",
     "-list search <nama>",
     "-list kategori <nama>"
   ],
@@ -20,7 +27,7 @@
     "-cancelorder ID"
   ],
   "owner": [
-    "-list add N|H|K|S|Stok",
+    "-list add N|H|K|S|Stok|Desk",
     "-list edit ID k=v",
     "-list remove ID",
     "-done / -fail / -refund ID",
@@ -30,6 +37,9 @@
     "-bcgroup <teks>",
     "-bcpromo <teks>",
     "-backup",
+    "-setpay <teks>",
+    "-setinfo <nama> <teks>",
+    "-delinfo <nama>",
     "-settings <key>",
     "-kickall",
     "-stats",
