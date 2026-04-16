@@ -12,7 +12,8 @@ module.exports = {
   ownerJids: [
     "6285138745718@s.whatsapp.net",
     "6285138745718@lid",
-    "13001486762213@lid"
+    "13001486762213@lid",
+    "97525855989985@lid"
   ],
 
   sessionPath: path.join(__dirname, "session"),
