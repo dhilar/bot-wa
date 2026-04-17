@@ -7,7 +7,8 @@ const {
 
 const qrcode = require("qrcode-terminal")
 const { Jimp } = require("jimp")
-const { Image, Font } = require("imagescript")
+const ImageScript = require("imagescript")
+const { Image, Font } = ImageScript
 const fs = require("fs")
 const path = require("path")
 const { Sticker, StickerTypes } = require("wa-sticker-formatter")
@@ -1648,16 +1649,30 @@ Ketik *cekorder ${id}* untuk melihat status.
               const img = await Image.decode(buffer)
               img.contain(512, 512)
               
-              // Buat font (imagescript menggunakan built-in font atau bisa load)
-              const font = await Font.load(fs.readFileSync(path.join(__dirname, "node_modules/imagescript/src/fonts/inter/Inter-Bold.ttf")))
+              // Load font secara aman
+              let font;
+              try {
+                // Mencoba load font bawaan imagescript
+                const fontPath = path.join(__dirname, "node_modules/imagescript/src/fonts/inter/Inter-Bold.ttf")
+                if (fs.existsSync(fontPath)) {
+                  font = await Font.load(fs.readFileSync(fontPath))
+                } else {
+                  // Fallback ke font yang sudah ter-load jika Font.load tidak tersedia atau file tidak ada
+                  font = await Font.load(await (await fetch("https://github.com/google/fonts/raw/main/ofl/inter/Inter-Bold.ttf")).arrayBuffer())
+                }
+              } catch (e) {
+                console.error("Font load error, using default:", e)
+              }
               
-              // Render teks (shadow)
-              const shadow = await Image.renderText(font, 64, stickerText, 0x000000ff)
-              img.composite(shadow, (img.width / 2) - (shadow.width / 2) + 2, img.height - shadow.height - 38)
-              
-              // Render teks (utama)
-              const text = await Image.renderText(font, 64, stickerText, 0xffffffff)
-              img.composite(text, (img.width / 2) - (text.width / 2), img.height - text.height - 40)
+              if (font) {
+                // Render teks (shadow)
+                const shadow = await Image.renderText(font, 64, stickerText, 0x000000ff)
+                img.composite(shadow, (img.width / 2) - (shadow.width / 2) + 2, img.height - shadow.height - 38)
+                
+                // Render teks (utama)
+                const text = await Image.renderText(font, 64, stickerText, 0xffffffff)
+                img.composite(text, (img.width / 2) - (text.width / 2), img.height - text.height - 40)
+              }
               
               buffer = await img.encode(3) // 3 = PNG
             } catch (e) {
@@ -1665,15 +1680,22 @@ Ketik *cekorder ${id}* untuk melihat status.
               // Fallback ke Jimp v1 jika imagescript gagal
               try {
                 const image = await Jimp.read(buffer)
+                // Jimp v1 API fixes
                 image.contain({ w: 512, h: 512 })
-                const font = await Jimp.loadFont(Jimp.fontSans64White)
-                const fontBlack = await Jimp.loadFont(Jimp.fontSans64Black)
-                const textWidth = Jimp.measureText(font, stickerText)
-                const textHeight = Jimp.measureTextHeight(font, stickerText, 512)
-                const x = (image.bitmap.width / 2) - (textWidth / 2)
-                const y = image.bitmap.height - textHeight - 40
-                image.print({ font: fontBlack, x: x + 2, y: y + 2, text: stickerText })
-                image.print({ font: font, x: x, y: y, text: stickerText })
+                
+                // Di Jimp v1, font diakses via instance atau static method yang berbeda
+                // Jika loadFont gagal, kita skip text overlay di fallback
+                if (typeof Jimp.loadFont === 'function') {
+                  const font = await Jimp.loadFont(Jimp.fontSans64White)
+                  const fontBlack = await Jimp.loadFont(Jimp.fontSans64Black)
+                  const textWidth = Jimp.measureText(font, stickerText)
+                  const textHeight = Jimp.measureTextHeight(font, stickerText, 512)
+                  const x = (image.bitmap.width / 2) - (textWidth / 2)
+                  const y = image.bitmap.height - textHeight - 40
+                  image.print({ font: fontBlack, x: x + 2, y: y + 2, text: stickerText })
+                  image.print({ font: font, x: x, y: y, text: stickerText })
+                }
+                
                 buffer = await image.getBuffer("image/png")
               } catch (jimpErr) {
                 console.error("Jimp fallback error:", jimpErr)
