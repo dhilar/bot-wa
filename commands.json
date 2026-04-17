@@ -1,74 +1,61 @@
 {
-  "main": [
-    "-menu",
-    "-ping",
-    "-runtime",
-    "-owner",
-    "-s / -sticker <pack|author>",
-    "-profile / -me",
-    "-leaderboard / -lb"
+  "utama": [
+    "fitur (Tampilkan semua menu)",
+    "ping (Cek kecepatan bot)",
+    "runtime (Cek waktu aktif bot)",
+    "owner (Hubungi pemilik bot)",
+    "s / sticker <teks> (Buat stiker dari gambar)",
+    "me / profile (Cek profil kamu)",
+    "lb / leaderboard (Top 10 user terbanyak XP)"
   ],
-  "info & payment": [
-    "-pay / -payment",
-    "-info / -penjelasan <nama>",
-    "-listinfo",
-    "• Trigger: menu, produk, pay"
+  "pembayaran": [
+    "pay / payment (Cara bayar)",
+    "info <nama> (Penjelasan produk)",
+    "listinfo (Daftar produk ber-info)"
   ],
   "produk": [
-    "-list show",
-    "-list info <id>",
-    "-list search <nama>",
-    "-list kategori <nama>"
+    "list (Daftar semua produk)",
+    "list info <id> (Detail produk)",
+    "list search <nama> (Cari produk)",
+    "list kategori <nama> (Filter kategori)"
   ],
   "order": [
-    "-order nama,id,qty,alamat",
-    "-myorder",
-    "-cekorder ID",
-    "-cancelorder ID"
+    "order nama,id,qty,alamat (Beli produk)",
+    "myorder (Cek riwayat belanja)",
+    "cekorder <id> (Cek status pesanan)",
+    "cancelorder <id> (Batalkan pesanan)"
   ],
   "owner": [
-    "-list add N|H|K|S|Stok|Desk",
-    "-list edit ID k=v",
-    "-list remove ID",
-    "-done / -fail / -refund ID",
-    "-process ID",
-    "-addnote ID <teks>",
-    "-bcuser <teks>",
-    "-bcgroup <teks>",
-    "-bcpromo <teks>",
-    "-pushcontact <delay>|<pesan>",
-    "-backup",
-    "-setpay <teks>",
-    "-setinfo <nama> <teks>",
-    "-delinfo <nama>",
-    "-settings <key>",
-    "-kickall",
-    "-stats",
-    "-clearcache",
-    "-restart"
+    "#list add N|H|K|S|Stok|Desk",
+    "#list edit <id> k=v",
+    "#list remove <id>",
+    "#done / #fail / #refund <id>",
+    "#addnote <id> <teks>",
+    "#bcuser <teks>",
+    "#bcgroup <teks>",
+    "#bcpromo <teks>",
+    "#pushcontact <delay>|<pesan>",
+    "#setpay <teks> (Sambil kirim QRIS)",
+    "#setinfo <nama> <teks>",
+    "#delinfo <nama>",
+    "#settings <key>",
+    "#kickall",
+    "#stats (Cek RAM VPS)",
+    "#clearcache",
+    "#restart"
   ],
-  "group": [
-    "-open / -close",
-    "-kick (reply)",
-    "-mute @user",
-    "-unmute @user",
-    "-antilink on/off",
-    "-antispam on/off",
-    "-welcome on/off",
-    "-goodbye on/off",
-    "-autodelete on/off",
-    "-setwelcome <teks>",
-    "-setgoodbye <teks>",
-    "-setautomsg <teks>|<menit>",
-    "-automsg on/off",
-    "-removeautomsg",
-    "-setgroupstatus <teks>|<menit>",
-    "-groupstatus on/off",
-    "-removegroupstatus",
-    "-lock on/off",
-    "-tagall",
-    "-hidetagall / -hta <teks>",
-    "-tagadmin",
-    "-ganalytics"
+  "grup": [
+    "#open / #close (Buka/tutup grup)",
+    "#kick (Reply pesan target)",
+    "#mute / #unmute @user",
+    "#antilink on/off",
+    "#antispam on/off",
+    "#welcome / #goodbye on/off",
+    "#autodelete on/off",
+    "#setwelcome / #setgoodbye <teks>",
+    "#lock on/off (Kunci info grup)",
+    "#tagall (Tag semua member)",
+    "#hta <teks> (Hidetag)",
+    "#ganalytics (Statistik grup)"
   ]
 }

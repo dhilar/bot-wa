@@ -1,7 +1,7 @@
 const path = require("path")
 
 module.exports = {
-  prefix: "-",
+  prefix: "#",
   debug: true,
   botName: "Digimu Bot",
 

@@ -7,6 +7,7 @@ const {
 
 const qrcode = require("qrcode-terminal")
 const Jimp = require("jimp")
+const fs = require("fs")
 const { Sticker, StickerTypes } = require("wa-sticker-formatter")
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys")
 const os = require("os")
@@ -61,7 +62,13 @@ function reply(sock, jid, text, quoted = null, options = {}) {
   }
 
   // Safety check for text argument to avoid TypeError [ERR_INVALID_ARG_TYPE]
-  const textContent = typeof text === "string" ? text : (typeof text === "object" ? JSON.stringify(text) : String(text))
+  let textContent = ""
+  try {
+    textContent = typeof text === "string" ? text : (typeof text === "object" ? JSON.stringify(text) : String(text))
+  } catch (e) {
+    textContent = "[Error formatting message]"
+    console.error("[REPLY ERROR] Text formatting failed:", e)
+  }
   
   // Ensure mentions is an array of strings
   if (options.mentions && !Array.isArray(options.mentions)) {
@@ -78,7 +85,9 @@ function reply(sock, jid, text, quoted = null, options = {}) {
     jid,
     { text: textContent, ...options },
     quotedMsg
-  )
+  ).catch(err => {
+    console.error("[SEND MESSAGE ERROR]:", err)
+  })
 }
 async function sendSticker(sock, jid, buffer, quoted, packname = "MyBot", author = "Owner") {
   try {
@@ -118,12 +127,11 @@ async function downloadMedia(msg) {
   return buffer
 }
 
-function makeMenu(pushName = "User") {
+function makeFitur(pushName = "User") {
   let menuText = `
 ┏━━━「 *${config.botName.toUpperCase()}* 」━━━
 ┃
 ┃ 👋 Halo, *${pushName}*!
-┃ ⌨️ Prefix: \`${config.prefix}\`
 ┃ 🕒 Time: ${new Date().toLocaleTimeString("id-ID", { timeZone: config.timezone })}
 ┃`
 
@@ -137,12 +145,18 @@ function makeMenu(pushName = "User") {
   }
 
   menuText += `
+┣━━━「 *INFO* 」
+┃ • Gunakan tanpa tanda baca
+┃   untuk fitur umum (User).
+┃ • Gunakan tanda pagar (#)
+┃   untuk fitur admin (Owner).
+┃
 ┣━━━「 *CARA ORDER* 」
-┃ 1. Cek produk: \`-list show\`
+┃ 1. Cek produk: \`list\`
 ┃ 2. Order produk:
-┃    \`-order Nama,ID,Qty,Alamat\`
-┃    _Contoh: -order Budi,2,1,Jakarta_
-┃ 3. Cek status: \`-cekorder ID\`
+┃    \`order Nama,ID,Qty,Alamat\`
+┃    _Contoh: order Budi,2,1,Jakarta_
+┃ 3. Cek status: \`cekorder ID\`
 ┃
 ┗━━━━━━━━━━━━━━━━━━━━`
 
@@ -158,14 +172,16 @@ function formatProductList(db) {
     const promoTag = item.isPromo ? "🔥 *PROMO* 🔥\n" : ""
     const description = item.deskripsi ? `\n📝 _${item.deskripsi}_` : ""
     
-    return `┌─────────────────
-│ ${promoTag}📦 *${item.nama}* (ID: ${item.id})
-│─────────────────
-│ 💰 *Rp ${Number(item.harga).toLocaleString("id-ID")}*
-│ 🏷️ Kategori: _${item.kategori}_
-│ ${stockColor} Stok: *${item.stock || 0}*
-│ ${statusEmoji} Status: *${item.status}*${description}
-└─────────────────`
+    return `╭━━━「 *${item.nama.toUpperCase()}* 」━━━
+┃
+┃ 🆔 ID: \`${item.id}\`
+┃ 💰 Harga: *Rp ${Number(item.harga).toLocaleString("id-ID")}*
+┃ 🗂 Kategori: _${item.kategori}_
+┃ ${stockColor} Stok: *${item.stock || 0}*
+┃ ${statusEmoji} Status: *${item.status}*
+┃ ${promoTag}${description}
+┃
+╰━━━━━━━━━━━━━━━━━━━━`.trim()
   }).join("\n\n")
 }
 
@@ -358,6 +374,17 @@ async function startBot() {
     }
   })
 
+  // Anti-Call Protection
+  sock.ev.on("call", async (call) => {
+    const { from, id, status } = call[0]
+    if (status === "offer") {
+      console.log(`[ANTI-CALL] Memblokir panggilan dari ${from}`)
+      await sock.rejectCall(id, from)
+      await sock.sendMessage(from, { text: "⚠️ *ANTI-CALL*\nMaaf, bot tidak menerima panggilan telepon/video. Akun Anda telah diblokir otomatis demi keamanan bot." })
+      await sock.updateBlockStatus(from, "block")
+    }
+  })
+
   sock.ev.on("group-participants.update", async (update) => {
     const { id, participants, action } = update
     const db = loadDB(config.dbFile)
@@ -365,21 +392,21 @@ async function startBot() {
 
     if (action === "add" && groupSettings.welcome) {
       for (let p of participants) {
-        const text = groupSettings.welcomeMsg || `Selamat datang @${p.split("@")[0]} di grup ini!`
-        await sock.sendMessage(id, {
-          text,
-          mentions: [p]
-        })
+        let text = groupSettings.welcomeMsg || `Selamat datang @${p.split("@")[0]} di grup ini!`
+        // Replace @user placeholder if exists
+        text = text.replace(/@user/g, `@${p.split("@")[0]}`)
+        
+        await reply(sock, id, text, null, { mentions: [p] })
       }
     }
 
     if (action === "remove" && groupSettings.goodbye) {
       for (let p of participants) {
-        const text = groupSettings.goodbyeMsg || `Selamat tinggal @${p.split("@")[0]}!`
-        await sock.sendMessage(id, {
-          text,
-          mentions: [p]
-        })
+        let text = groupSettings.goodbyeMsg || `Selamat tinggal @${p.split("@")[0]}!`
+        // Replace @user placeholder if exists
+        text = text.replace(/@user/g, `@${p.split("@")[0]}`)
+        
+        await reply(sock, id, text, null, { mentions: [p] })
       }
     }
   })
@@ -444,6 +471,17 @@ async function startBot() {
        if (isGroup) {
         const groupSettings = db.groups[from] || {}
         
+        // Auto-Responder Simple
+        if (!owner && !text.startsWith(".") && !prefix) {
+          const lowerText = text.toLowerCase()
+          if (lowerText.includes("cara order") || lowerText.includes("beli gimana")) {
+            return reply(sock, from, "📦 *CARA ORDER:*\n1. Ketik `list` untuk cek produk\n2. Ketik `order Nama,ID,Qty,Alamat` untuk membeli\n3. Lakukan pembayaran via `pay`", m)
+          }
+          if (lowerText.includes("ready") || lowerText.includes("stok")) {
+             return reply(sock, from, "🛒 Silahkan ketik `list` untuk cek stok produk yang tersedia saat ini kak!", m)
+          }
+        }
+
         // Mute logic
         if (groupSettings.mutedUsers && groupSettings.mutedUsers.includes(senderJid)) {
           const groupMeta = await sock.groupMetadata(from)
@@ -558,7 +596,7 @@ async function startBot() {
         }
 
         // Trigger "menu" atau "produk" tanpa prefix (tunggal)
-        if (!prefix && /^(menu|produk|pay|payment|pembayaran|list)$/i.test(text)) {
+        if (!prefix && /^(fitur|menu|produk|pay|payment|pembayaran|list|ping|runtime|owner|me|profile|lb|leaderboard|order|myorder|cekorder|cancelorder|s|sticker|listinfo|info)$/i.test(text)) {
           prefix = "" // No prefix needed
         } else if (!prefix) {
           return
@@ -577,13 +615,16 @@ async function startBot() {
         const args = parts.slice(1)
 
         // Command Alias
+        // Command Alias
         const aliases = {
           "p": "ping",
           "s": "sticker",
-          "m": "menu",
+          "m": "fitur",
+          "menu": "fitur",
           "pay": "payment",
           "pembayaran": "payment",
           "u": "profile",
+          "me": "profile",
           "lb": "leaderboard",
           "bc": "bcuser",
           "bcg": "bcgroup",
@@ -600,13 +641,13 @@ async function startBot() {
 
        log("IS OWNER:", owner)
 
-      if (cmd === "menu") {
-        return reply(sock, from, makeMenu(pushName), m)
+      if (cmd === "fitur") {
+        return reply(sock, from, makeFitur(pushName), m)
       }
 
       if (cmd === "penjelasan") {
         const product = args[0]?.toLowerCase()
-        if (!product) return reply(sock, from, "Gunakan: -penjelasan <nama_produk>", m)
+        if (!product) return reply(sock, from, "Gunakan: info <nama_produk>", m)
 
         const info = db.explanations[product]
         if (!info) return reply(sock, from, `❌ Penjelasan untuk "${product}" tidak ditemukan.`, m)
@@ -619,7 +660,7 @@ async function startBot() {
         const product = args[0]?.toLowerCase()
         const text = args.slice(1).join(" ")
 
-        if (!product || !text) return reply(sock, from, "Gunakan: -setinfo <nama_produk> <teks penjelasan>", m)
+        if (!product || !text) return reply(sock, from, "Gunakan: #setinfo <nama_produk> <teks penjelasan>", m)
 
         db.explanations[product] = text
         saveDB(config.dbFile, db)
@@ -630,7 +671,7 @@ async function startBot() {
         if (!owner) return reply(sock, from, "❌ Khusus owner", m)
         const product = args[0]?.toLowerCase()
 
-        if (!product) return reply(sock, from, "Gunakan: -delinfo <nama_produk>", m)
+        if (!product) return reply(sock, from, "Gunakan: #delinfo <nama_produk>", m)
 
         if (!db.explanations[product]) return reply(sock, from, "❌ Produk tidak ditemukan di daftar info.", m)
 
@@ -647,7 +688,7 @@ async function startBot() {
         list.forEach((item, i) => {
           teks += `${i + 1}. ${item}\n`
         })
-        teks += "\nKetik: `-penjelasan <nama>` untuk detail."
+        teks += "\nKetik: `info <nama>` untuk detail."
         return reply(sock, from, teks, m)
       }
 
@@ -681,7 +722,7 @@ async function startBot() {
 
         const textOut = args.join(" ")
         if (!textOut && !imageBuffer) {
-          return reply(sock, from, "Gunakan: -setpay <teks instruksi> (sambil kirim/reply gambar QRIS)", m)
+          return reply(sock, from, "Gunakan: #setpay <teks instruksi> (sambil kirim/reply gambar QRIS)", m)
         }
 
         if (!db.payment) db.payment = {}
@@ -827,18 +868,23 @@ async function startBot() {
           saveDB(config.dbFile, db)
           return reply(sock, from, `✅ Multi Prefix: ${db.settings.multiPrefix ? "ON" : "OFF"}`, m)
         }
-        return reply(sock, from, "Gunakan:\n-settings antilinkglobal\n-settings multiprefix", m)
+        return reply(sock, from, "Gunakan:\n#settings antilinkglobal\n#settings multiprefix", m)
       }
 
       if (cmd === "backup") {
         if (!owner) return reply(sock, from, "❌ Khusus owner", m)
-        const buffer = fs.readFileSync(config.dbFile)
-        await sock.sendMessage(from, {
-          document: buffer,
-          mimetype: "application/json",
-          fileName: "db_backup.json"
-        }, { quoted: m })
-        return reply(sock, from, "✅ Database backup terkirim", m)
+        try {
+          const buffer = fs.readFileSync(config.dbFile)
+          await sock.sendMessage(from, {
+            document: buffer,
+            mimetype: "application/json",
+            fileName: "db_backup.json"
+          }, { quoted: m })
+          return reply(sock, from, "✅ Database backup terkirim", m)
+        } catch (e) {
+          console.error("Backup error:", e)
+          return reply(sock, from, "❌ Gagal melakukan backup database: " + e.message, m)
+        }
       }
 
       if (cmd === "groupanalytics" || cmd === "ganalytics") {
@@ -879,10 +925,10 @@ async function startBot() {
         if (!isGroup) return reply(sock, from, "❌ Hanya bisa di grup", m)
         if (!owner) return reply(sock, from, "❌ Khusus owner", m)
 
-        // Format: -pushcontact delay|pesan {opsi1|opsi2}
+        // Format: #pushcontact delay|pesan {opsi1|opsi2}
         const rawText = args.join(" ")
         if (!rawText || !rawText.includes("|")) {
-          return reply(sock, from, "❌ Format salah!\nGunakan: `-pushcontact delay|Pesan Anda` atau `-pushcontact 20|Halo {kak|bang|teman}!`", m)
+          return reply(sock, from, "❌ Format salah!\nGunakan: `#pushcontact delay|Pesan Anda` atau `#pushcontact 20|Halo {kak|bang|teman}!`", m)
         }
 
         const [delayRaw, ...messageParts] = rawText.split("|")
@@ -940,7 +986,7 @@ async function startBot() {
         }
 
         const textOut = args.slice(messageStartIndex).join(" ")
-        if (!textOut) return reply(sock, from, `❌ Masukkan teks\n\nContoh dengan delay custom:\n-${cmd} 15 Halo semuanya\n(Artinya kirim tiap 15 detik)`, m)
+        if (!textOut) return reply(sock, from, `❌ Masukkan teks\n\nContoh dengan delay custom:\n#${cmd} 15 Halo semuanya\n(Artinya kirim tiap 15 detik)`, m)
 
         let targets = []
         if (cmd === "bcuser") {
@@ -974,7 +1020,7 @@ async function startBot() {
 
         if (sub === "show") {
           const textOut = formatProductList(db)
-          return reply(sock, from, `🛒 *DAFTAR PRODUK*\n\n${textOut}\n\n_Order: -order Nama,ID,Qty,Alamat_`, m)
+          return reply(sock, from, `🛒 *DAFTAR PRODUK*\n\n${textOut}\n\n_Order: order Nama,ID,Qty,Alamat_`, m)
         }
 
         if (sub === "search") {
@@ -999,7 +1045,7 @@ async function startBot() {
           const kategori = args.slice(1).join(" ").trim().toLowerCase()
 
           if (!kategori) {
-            return reply(sock, from, "❌ Contoh: -list kategori AI", m)
+            return reply(sock, from, "❌ Contoh: list kategori AI", m)
           }
 
           const hasil = db.list.filter(item =>
@@ -1019,7 +1065,7 @@ async function startBot() {
 
         if (sub === "info" || sub === "detail") {
           const id = Number(args[1])
-          if (Number.isNaN(id)) return reply(sock, from, "❌ Format: -list info ID", m)
+          if (Number.isNaN(id)) return reply(sock, from, "❌ Format: list info ID", m)
 
           const item = db.list.find(x => Number(x.id) === id)
           if (!item) return reply(sock, from, "❌ Produk tidak ditemukan", m)
@@ -1046,7 +1092,7 @@ ${promoTag}
 ${item.deskripsi || "Tidak ada deskripsi."}
 
 🛒 *Cara Order*:
-Ketik: \`-order ${pushName},${item.id},1,-\`
+Ketik: \`order ${pushName},${item.id},1,-\`
 `.trim(),
             m
           )
@@ -1059,7 +1105,7 @@ Ketik: \`-order ${pushName},${item.id},1,-\`
           const data = raw.split("|")
 
           if (data.length < 5) {
-            return reply(sock, from, "❌ Format: -list add Nama|Harga|Kategori|Status|Stock|Deskripsi(opsional)", m)
+            return reply(sock, from, "❌ Format: #list add Nama|Harga|Kategori|Status|Stock|Deskripsi(opsional)", m)
           }
 
           const [nama, hargaRaw, kategori, status, stockRaw, deskripsi] = data.map(x => x?.trim())
@@ -1115,7 +1161,7 @@ Ketik: \`-order ${pushName},${item.id},1,-\`
           const [key, value] = raw.split("=").map(x => x.trim())
 
           if (Number.isNaN(id) || !key || !value) {
-            return reply(sock, from, "❌ Format: -list edit ID key=value\nContoh: -list edit 1 stock=10", m)
+            return reply(sock, from, "❌ Format: #list edit ID key=value\nContoh: #list edit 1 stock=10", m)
           }
 
           const index = db.list.findIndex(item => Number(item.id) === id)
@@ -1146,7 +1192,7 @@ Ketik: \`-order ${pushName},${item.id},1,-\`
           const id = Number(args[1])
 
           if (Number.isNaN(id)) {
-            return reply(sock, from, "❌ Format: -list remove ID", m)
+            return reply(sock, from, "❌ Format: #list remove ID", m)
           }
 
           const before = db.list.length
@@ -1167,11 +1213,11 @@ Ketik: \`-order ${pushName},${item.id},1,-\`
           db.list.forEach(item => {
             simpleList += `• [${item.id}] ${item.nama}\n`
           })
-          simpleList += "\n_Ketik `-list info <id>` untuk detail_"
-          
-          if (owner) {
-            simpleList += "\n\n👮‍♂️ *ADMIN MENU:* \n-list add, -list edit, -list remove"
-          }
+          simpleList += "\n_Ketik `list info <id>` untuk detail_"
+           
+           if (owner) {
+             simpleList += "\n\n👮‍♂️ *ADMIN MENU:* \n#list add, #list edit, #list remove"
+           }
           
           return reply(sock, from, simpleList, m)
         }
@@ -1269,7 +1315,7 @@ Ketik: \`-order ${pushName},${item.id},1,-\`
 📌 Status: pending
 🕒 Tanggal: ${isoNow.split("T")[0]}
 
-Ketik *-cekorder ${id}* untuk melihat status.
+Ketik *cekorder ${id}* untuk melihat status.
 `.trim(),
           m
         )
@@ -1312,7 +1358,7 @@ Ketik *-cekorder ${id}* untuk melihat status.
         const id = args[0]
         const note = args.slice(1).join(" ")
         
-        if (!id || !note) return reply(sock, from, "❌ Format: -addnote ID Catatan", m)
+        if (!id || !note) return reply(sock, from, "❌ Format: #addnote ID Catatan", m)
         
         const orderIndex = db.orders.findIndex(o => o.id === id)
         if (orderIndex === -1) return reply(sock, from, "❌ Order tidak ditemukan", m)
@@ -1574,7 +1620,7 @@ Ketik *-cekorder ${id}* untuk melihat status.
 
         if (args.length < 3) {
           return reply(sock, from,
-            "❌ Format:\n-spam teks jumlah delay(ms)\natau\n-spam 628xxxx teks jumlah delay",
+            "❌ Format:\n#spam teks jumlah delay(ms)\natau\n#spam 628xxxx teks jumlah delay",
             m
           )
         }
@@ -1656,7 +1702,7 @@ Ketik *-cekorder ${id}* untuk melihat status.
         const participants = groupMeta.participants
         
         const textCustom = args.join(" ")
-        if (!textCustom) return reply(sock, from, "❌ Masukkan teks promosi\nContoh: -hta Promo Netflix Murah!", m)
+        if (!textCustom) return reply(sock, from, "❌ Masukkan teks promosi\nContoh: #hta Promo Netflix Murah!", m)
 
         let mentions = participants.map(p => p.id)
 
@@ -1673,32 +1719,32 @@ Ketik *-cekorder ${id}* untuk melihat status.
 📖 *OWNER GUIDE - CONTOH PERINTAH & OUTPUT*
 
 1️⃣ *MANAJEMEN PRODUK*
-• *Tambah*: \`-list add Netflix|35000|Streaming|Ready|50\`
-• *Edit*: \`-list edit 1 stock=100\`
+• *Tambah*: \`#list add Netflix|35000|Streaming|Ready|50\`
+• *Edit*: \`#list edit 1 stock=100\`
 
 2️⃣ *MANAJEMEN ORDER*
-• *Proses*: \`-process ORD-123\`
-• *Selesai*: \`-done ORD-123\`
-• *Catatan*: \`-addnote ORD-123 Akun: abc@mail.com | Pass: 123\`
-• *Refund*: \`-refund ORD-123\` (Stok balik otomatis)
+• *Proses*: \`#process ORD-123\`
+• *Selesai*: \`#done ORD-123\`
+• *Catatan*: \`#addnote ORD-123 Akun: abc@mail.com | Pass: 123\`
+• *Refund*: \`#refund ORD-123\` (Stok balik otomatis)
 
 3️⃣ *AUTO STATUS & MESSAGE*
-• *Status Grup (Story)*: \`-setgroupstatus Teks|Menit\`
+• *Status Grup (Story)*: \`#setgroupstatus Teks|Menit\`
   └ _Member grup akan lihat bot punya SW baru._
-• *Pesan Grup (Chat)*: \`-setautomsg Teks|Menit\`
+• *Pesan Grup (Chat)*: \`#setautomsg Teks|Menit\`
   └ _Bot kirim chat otomatis ke dalam grup._
-• *Status Global (Story)*: \`-setautostatus Teks|Menit\`
+• *Status Global (Story)*: \`#setautostatus Teks|Menit\`
   └ _Semua kontak akan lihat SW bot._
 
 4️⃣ *PROMOSI & KEAMANAN*
-• *Hide Tag*: \`-hta Promo!\` (Tag semua tanpa list)
-• *Mute*: \`-mute @tag\` (Hapus pesan dia otomatis)
-• *Anti-Link*: \`-antilink on\` (Auto kick pengirim link)
+• *Hide Tag*: \`#hta Promo!\` (Tag semua tanpa list)
+• *Mute*: \`#mute @tag\` (Hapus pesan dia otomatis)
+• *Anti-Link*: \`#antilink on\` (Auto kick pengirim link)
 
 5️⃣ *SISTEM*
-• *Stats*: \`-stats\` (Monitor RAM VPS 1GB)
-• *Backup*: \`-backup\` (Bot kirim file db.json)
-• *Clear Cache*: \`-clearcache\` (Manual bersihkan RAM)
+• *Stats*: \`#stats\` (Monitor RAM VPS 1GB)
+• *Backup*: \`#backup\` (Bot kirim file db.json)
+• *Clear Cache*: \`#clearcache\` (Manual bersihkan RAM)
 `.trim()
 
         return reply(sock, from, textGuide, m)
@@ -1714,7 +1760,7 @@ Ketik *-cekorder ${id}* untuk melihat status.
         const interval = Number(intervalRaw)
 
         if (!textMsg || isNaN(interval) || interval < 1) {
-          return reply(sock, from, `❌ Format: -${cmd} Teks|IntervalMenit\nContoh: -${cmd} Promo Netflix Murah|60`, m)
+          return reply(sock, from, `❌ Format: #${cmd} Teks|IntervalMenit\nContoh: #${cmd} Promo Netflix Murah|60`, m)
         }
 
         if (!db.groups[from]) db.groups[from] = {}
@@ -1726,7 +1772,7 @@ Ketik *-cekorder ${id}* untuk melihat status.
         }
         saveDB(config.dbFile, db)
 
-        return reply(sock, from, `✅ Auto Message berhasil diatur!\n\n📝 Teks: ${textMsg}\n⏱ Interval: ${interval} menit\n📌 Status: ${db.groups[from].autoMsg.enabled ? "ON" : "OFF"}\n\nKetik *-automsg on* untuk mengaktifkan.`, m)
+        return reply(sock, from, `✅ Auto Message berhasil diatur!\n\n📝 Teks: ${textMsg}\n⏱ Interval: ${interval} menit\n📌 Status: ${db.groups[from].autoMsg.enabled ? "ON" : "OFF"}\n\nKetik *#automsg on* untuk mengaktifkan.`, m)
       }
 
       if (cmd === "automsg") {
@@ -1734,10 +1780,10 @@ Ketik *-cekorder ${id}* untuk melihat status.
         if (!owner) return reply(sock, from, "❌ Khusus owner", m)
 
         const sub = (args[0] || "").toLowerCase()
-        if (sub !== "on" && sub !== "off") return reply(sock, from, "Gunakan: -automsg on/off", m)
+        if (sub !== "on" && sub !== "off") return reply(sock, from, "Gunakan: #automsg on/off", m)
 
         if (!db.groups[from]?.autoMsg?.text) {
-          return reply(sock, from, "❌ Atur teks dulu dengan: -setautomsg Teks|Menit", m)
+          return reply(sock, from, "❌ Atur teks dulu dengan: #setautomsg Teks|Menit", m)
         }
 
         db.groups[from].autoMsg.enabled = (sub === "on")
@@ -1767,7 +1813,7 @@ Ketik *-cekorder ${id}* untuk melihat status.
         const interval = Number(intervalRaw)
 
         if (!textStatus || isNaN(interval) || interval < 1) {
-          return reply(sock, from, `❌ Format: -${cmd} Teks|IntervalMenit\nContoh: -${cmd} Promo Netflix Story|120`, m)
+          return reply(sock, from, `❌ Format: #${cmd} Teks|IntervalMenit\nContoh: #${cmd} Promo Netflix Story|120`, m)
         }
 
         if (!db.settings) db.settings = {}
@@ -1779,17 +1825,17 @@ Ketik *-cekorder ${id}* untuk melihat status.
         }
         saveDB(config.dbFile, db)
 
-        return reply(sock, from, `✅ Auto Status (Story) berhasil diatur!\n\n📝 Teks: ${textStatus}\n⏱ Interval: ${interval} menit\n📌 Status: ${db.settings.autoStatus.enabled ? "ON" : "OFF"}\n\nKetik *-autostatus on* untuk mengaktifkan ke Story WA kamu.`, m)
+        return reply(sock, from, `✅ Auto Status (Story) berhasil diatur!\n\n📝 Teks: ${textStatus}\n⏱ Interval: ${interval} menit\n📌 Status: ${db.settings.autoStatus.enabled ? "ON" : "OFF"}\n\nKetik *#autostatus on* untuk mengaktifkan ke Story WA kamu.`, m)
       }
 
       if (cmd === "autostatus") {
         if (!owner) return reply(sock, from, "❌ Khusus owner", m)
 
         const sub = (args[0] || "").toLowerCase()
-        if (sub !== "on" && sub !== "off") return reply(sock, from, "Gunakan: -autostatus on/off", m)
+        if (sub !== "on" && sub !== "off") return reply(sock, from, "Gunakan: #autostatus on/off", m)
 
         if (!db.settings?.autoStatus?.text) {
-          return reply(sock, from, "❌ Atur teks dulu dengan: -setautostatus Teks|Menit", m)
+          return reply(sock, from, "❌ Atur teks dulu dengan: #setautostatus Teks|Menit", m)
         }
 
         db.settings.autoStatus.enabled = (sub === "on")
@@ -1893,7 +1939,7 @@ Ketik *-cekorder ${id}* untuk melihat status.
       }
 
       // Security Grup Commands
-      if (["antilink", "welcome", "goodbye", "autodelete"].includes(cmd)) {
+      if (["antilink", "welcome", "goodbye", "autodelete", "antispam"].includes(cmd)) {
         if (!isGroup) return reply(sock, from, "❌ Hanya di grup", m)
         const groupMeta = await sock.groupMetadata(from)
         const isAdmin = groupMeta.participants.some(
@@ -1902,7 +1948,7 @@ Ketik *-cekorder ${id}* untuk melihat status.
         if (!isAdmin && !owner) return reply(sock, from, "❌ Khusus admin", m)
 
         const sub = (args[0] || "").toLowerCase()
-        if (sub !== "on" && sub !== "off") return reply(sock, from, `Gunakan: -${cmd} on/off`, m)
+        if (sub !== "on" && sub !== "off") return reply(sock, from, `Gunakan: #${cmd} on/off`, m)
 
         if (!db.groups[from]) db.groups[from] = {}
         db.groups[from][cmd] = (sub === "on")
@@ -1920,7 +1966,7 @@ Ketik *-cekorder ${id}* untuk melihat status.
         if (!isAdmin && !owner) return reply(sock, from, "❌ Khusus admin", m)
 
         const textOut = args.join(" ")
-         if (!textOut) return reply(sock, from, `Gunakan: -${cmd} teks`, m)
+         if (!textOut) return reply(sock, from, `Gunakan: #${cmd} teks`, m)
 
         if (!db.groups[from]) db.groups[from] = {}
         const key = cmd === "setwelcome" ? "welcomeMsg" : "goodbyeMsg"
@@ -1946,11 +1992,11 @@ Ketik *-cekorder ${id}* untuk melihat status.
           await sock.groupSettingUpdate(from, "unlocked")
           return reply(sock, from, "✅ Grup terbuka (semua bisa edit info)", m)
         } else {
-          return reply(sock, from, "Gunakan: -lock on/off", m)
+          return reply(sock, from, "Gunakan: #lock on/off", m)
         }
       }
 
-      return reply(sock, from, "❓ Command tidak dikenal. Ketik -menu", m)
+      return reply(sock, from, "❓ Command tidak dikenal. Ketik `fitur` untuk melihat menu.", m)
     } catch (err) {
       console.error("ERROR messages.upsert:", err)
     }
