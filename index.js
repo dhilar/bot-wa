@@ -497,21 +497,56 @@ async function startBot() {
       }
       saveDB(config.dbFile, db)
 
+      // Auto-Responder Simple & Product Detail by Name
+      if (!owner && !text.startsWith("#") && !prefix && !isUserCmd) {
+        const lowerText = text.toLowerCase().trim()
+        
+        // Auto-reply cara order
+        if (lowerText.includes("cara order") || lowerText.includes("beli gimana") || lowerText.includes("cara pesen")) {
+          return reply(sock, from, "📦 *CARA ORDER:*\n1. Ketik `list` untuk cek produk\n2. Ketik `order ID,Qty,Alamat` untuk membeli\n3. Lakukan pembayaran via `pay`", m)
+        }
+        
+        // Auto-reply ready/stok
+        if (lowerText.includes("ready") || lowerText.includes("stok")) {
+           return reply(sock, from, "🛒 Silahkan ketik `list` untuk cek stok produk yang tersedia saat ini kak!", m)
+        }
+
+        // Product Detail by Name lookup
+        const foundProduct = db.list.find(p => p.nama.toLowerCase() === lowerText)
+        if (foundProduct) {
+          const statusEmoji = foundProduct.status === "Ready" ? "✅" : "⛔"
+          const stockColor = foundProduct.stock > 10 ? "🟢" : foundProduct.stock > 0 ? "🟡" : "🔴"
+          const promoTag = foundProduct.isPromo ? "🔥 *PROMO SEDANG BERLANGSUNG* 🔥\n" : ""
+
+          return reply(
+            sock,
+            from,
+            `
+🔍 *DETAIL PRODUK*
+
+${promoTag}
+📦 Nama: ${foundProduct.nama}
+🆔 ID: ${foundProduct.id}
+💰 Harga: Rp ${Number(foundProduct.harga).toLocaleString("id-ID")}
+🗂 Kategori: ${foundProduct.kategori}
+📌 Status: ${foundProduct.status} ${statusEmoji}
+📦 Stok: ${foundProduct.stock} ${stockColor}
+
+📝 *Deskripsi*:
+${foundProduct.deskripsi || "Tidak ada deskripsi."}
+
+🛒 *Cara Order*:
+Ketik: \`order ${foundProduct.id},1,-\`
+`.trim(),
+            m
+          )
+        }
+      }
+
       // Group logic (Anti-link, Anti-spam, Mute)
       if (isGroup) {
         const groupSettings = db.groups[from] || {}
         
-        // Auto-Responder Simple
-        if (!owner && !text.startsWith("#") && !prefix && !isUserCmd) {
-          const lowerText = text.toLowerCase()
-          if (lowerText.includes("cara order") || lowerText.includes("beli gimana")) {
-            return reply(sock, from, "📦 *CARA ORDER:*\n1. Ketik `list` untuk cek produk\n2. Ketik `order Nama,ID,Qty,Alamat` untuk membeli\n3. Lakukan pembayaran via `pay`", m)
-          }
-          if (lowerText.includes("ready") || lowerText.includes("stok")) {
-             return reply(sock, from, "🛒 Silahkan ketik `list` untuk cek stok produk yang tersedia saat ini kak!", m)
-          }
-        }
-
         // Mute logic
         if (groupSettings.mutedUsers && groupSettings.mutedUsers.includes(senderJid)) {
           const groupMeta = await sock.groupMetadata(from)
@@ -1047,7 +1082,7 @@ async function startBot() {
 
         if (sub === "show") {
           const textOut = formatProductList(db)
-          return reply(sock, from, `🛒 *DAFTAR PRODUK*\n\n${textOut}\n\n_Order: order Nama,ID,Qty,Alamat_`, m)
+          return reply(sock, from, `🛒 *DAFTAR PRODUK*\n\n${textOut}\n\n_Order: order ID,Qty,Alamat_`, m)
         }
 
         if (sub === "search") {
@@ -1114,7 +1149,7 @@ ${promoTag}
 ${item.deskripsi || "Tidak ada deskripsi."}
 
 🛒 *Cara Order*:
-Ketik: \`order ${pushName},${item.id},1,-\`
+Ketik: \`order ${item.id},1,-\`
 `.trim(),
             m
           )
@@ -1267,26 +1302,26 @@ Ketik: \`order ${pushName},${item.id},1,-\`
         const raw = args.join(" ")
         const data = raw.split(",")
 
-        if (data.length < 4) {
+        if (data.length < 3) {
           return reply(
             sock,
             from,
-            "❌ Format: -order nama,idproduk,qty,alamat\nContoh: -order Bagas,2,1,-",
+            "❌ Format: order idproduk,qty,alamat\nContoh: order 2,1,-",
             m
           )
         }
 
-        const [nama, produkIdRaw, qtyRaw, alamat] = data.map(x => x.trim())
+        const [produkIdRaw, qtyRaw, alamat] = data.map(x => x.trim())
         const produkId = Number(produkIdRaw)
         const qty = Number(qtyRaw)
 
-        if (!nama || Number.isNaN(produkId) || Number.isNaN(qty)) {
+        if (Number.isNaN(produkId) || Number.isNaN(qty)) {
           return reply(sock, from, "❌ ID produk dan qty harus angka", m)
         }
 
         const productIndex = db.list.findIndex(item => Number(item.id) === produkId)
         if (productIndex === -1) {
-          return reply(sock, from, "❌ Produk tidak ditemukan. Ketik -list show", m)
+          return reply(sock, from, "❌ Produk tidak ditemukan. Ketik list show", m)
         }
         
         const product = db.list[productIndex]
@@ -1302,7 +1337,7 @@ Ketik: \`order ${pushName},${item.id},1,-\`
 
         db.orders.push({
           id,
-          nama,
+          nama: pushName,
           produk: product.nama,
           harga: product.harga,
           total: totalPrice,
@@ -1587,32 +1622,49 @@ Ketik *cekorder ${id}* untuk melihat status.
 
           let buffer = await downloadMedia(msg)
           
-          // Parse metadata: -s packname|author atau -s text="hai"
-          let [packname, author] = args.join(" ").split("|")
+          // Parse metadata: -s packname|author atau -s "teks stiker"
+          let input = args.join(" ").trim()
+          let [packname, author] = input.split("|")
           
-          // Check for text overlay in quotes: -s "halo"
-          const textMatch = args.join(" ").match(/"([^"]+)"/)
-          const stickerText = textMatch ? textMatch[1] : null
-          
-          if (stickerText && (msg.message?.imageMessage || (msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage))) {
+          // Check for text overlay in quotes: -s "halo" or just text if no quotes
+          // If no | separator, assume the whole thing might be text if it's in quotes
+          let stickerText = null
+          const textMatch = input.match(/"([^"]+)"/)
+          if (textMatch) {
+            stickerText = textMatch[1]
+            // If text was in quotes, packname/author should be default
+            packname = config.botName
+            author = "Owner"
+          } else if (input && !input.includes("|")) {
+             // If no quotes and no separator, treat as possible text
+             stickerText = input
+          }
+
+          if (stickerText && (msg.message?.imageMessage || msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage)) {
             try {
               const image = await Jimp.read(buffer)
-              const font = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE)
               
-              // Simple text overlay at the bottom center
+              // Resize for standard sticker size if needed
+              image.contain(512, 512)
+              
+              // Load a better font if possible, or use default
+              const font = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE)
+              const fontBlack = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK)
+              
               const textWidth = Jimp.measureText(font, stickerText)
               const textHeight = Jimp.measureTextHeight(font, stickerText)
               
-              image.print(
-                font,
-                (image.bitmap.width / 2) - (textWidth / 2),
-                image.bitmap.height - textHeight - 20,
-                stickerText
-              )
+              const x = (image.bitmap.width / 2) - (textWidth / 2)
+              const y = image.bitmap.height - textHeight - 40 // Move up a bit from bottom
+              
+              // Add shadow/outline for readability
+              image.print(fontBlack, x + 2, y + 2, stickerText)
+              image.print(fontBlack, x - 2, y - 2, stickerText)
+              image.print(font, x, y, stickerText)
               
               buffer = await image.getBufferAsync(Jimp.MIME_PNG)
             } catch (e) {
-              console.error("Jimp error:", e)
+              console.error("Jimp text overlay error:", e)
             }
           }
           
