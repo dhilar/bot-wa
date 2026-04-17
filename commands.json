@@ -10,7 +10,7 @@
   ],
   "pembayaran": [
     "pay / payment (Cara bayar)",
-    "info <nama> (Penjelasan produk)",
+    "info / penjelasan <nama/ID>",
     "listinfo (Daftar produk ber-info)"
   ],
   "produk": [

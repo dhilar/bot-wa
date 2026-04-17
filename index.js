@@ -63,27 +63,33 @@ function reply(sock, jid, text, quoted = null, options = {}) {
 
   // Safety check for text argument to avoid TypeError [ERR_INVALID_ARG_TYPE]
   let textContent = ""
-  try {
-    textContent = typeof text === "string" ? text : (typeof text === "object" ? JSON.stringify(text) : String(text))
-  } catch (e) {
-    textContent = "[Error formatting message]"
-    console.error("[REPLY ERROR] Text formatting failed:", e)
+  if (typeof text === "string") {
+    textContent = text
+  } else if (text && typeof text === "object") {
+    try {
+      textContent = JSON.stringify(text)
+    } catch (e) {
+      textContent = String(text)
+    }
+  } else {
+    textContent = String(text || "")
   }
   
   // Ensure mentions is an array of strings
-  if (options.mentions && !Array.isArray(options.mentions)) {
-    options.mentions = [options.mentions]
+  const sendOptions = { ...options }
+  if (sendOptions.mentions && !Array.isArray(sendOptions.mentions)) {
+    sendOptions.mentions = [sendOptions.mentions]
   }
-  if (options.mentions) {
-    options.mentions = options.mentions.filter(m => typeof m === "string")
+  if (sendOptions.mentions) {
+    sendOptions.mentions = sendOptions.mentions.filter(m => typeof m === "string")
   }
 
   // Safety check for quoted message
-  const quotedMsg = (quoted && quoted.key) ? { quoted } : {}
+  const quotedMsg = (quoted && quoted.key && typeof quoted.key === "object") ? { quoted } : {}
 
   return sock.sendMessage(
     jid,
-    { text: textContent, ...options },
+    { text: textContent, ...sendOptions },
     quotedMsg
   ).catch(err => {
     console.error("[SEND MESSAGE ERROR]:", err)
@@ -172,16 +178,16 @@ function formatProductList(db) {
     const promoTag = item.isPromo ? "🔥 *PROMO* 🔥\n" : ""
     const description = item.deskripsi ? `\n📝 _${item.deskripsi}_` : ""
     
-    return `╭━━━「 *${item.nama.toUpperCase()}* 」━━━
-┃
+    return `╭━━━━━━━━━━━━━━━━━╮
+┃   📦 *${item.nama.toUpperCase()}*   ┃
+┣━━━━━━━━━━━━━━━━━┫
 ┃ 🆔 ID: \`${item.id}\`
 ┃ 💰 Harga: *Rp ${Number(item.harga).toLocaleString("id-ID")}*
 ┃ 🗂 Kategori: _${item.kategori}_
 ┃ ${stockColor} Stok: *${item.stock || 0}*
 ┃ ${statusEmoji} Status: *${item.status}*
 ┃ ${promoTag}${description}
-┃
-╰━━━━━━━━━━━━━━━━━━━━`.trim()
+╰━━━━━━━━━━━━━━━━━╯`.trim()
   }).join("\n\n")
 }
 
@@ -387,8 +393,12 @@ async function startBot() {
 
   sock.ev.on("group-participants.update", async (update) => {
     const { id, participants, action } = update
+    console.log(`[GROUP EVENT] ${action} in ${id} for ${participants.join(", ")}`)
+    
     const db = loadDB(config.dbFile)
     const groupSettings = db.groups[id] || {}
+    
+    console.log(`[GROUP SETTINGS] Welcome: ${groupSettings.welcome}, Goodbye: ${groupSettings.goodbye}`)
 
     if (action === "add" && groupSettings.welcome) {
       for (let p of participants) {
@@ -396,6 +406,7 @@ async function startBot() {
         // Replace @user placeholder if exists
         text = text.replace(/@user/g, `@${p.split("@")[0]}`)
         
+        console.log(`[SENDING WELCOME] to ${p}`)
         await reply(sock, id, text, null, { mentions: [p] })
       }
     }
@@ -406,6 +417,7 @@ async function startBot() {
         // Replace @user placeholder if exists
         text = text.replace(/@user/g, `@${p.split("@")[0]}`)
         
+        console.log(`[SENDING GOODBYE] to ${p}`)
         await reply(sock, id, text, null, { mentions: [p] })
       }
     }
@@ -447,32 +459,48 @@ async function startBot() {
         config.ownerJids
       )
 
-       // User System (XP/Level)
-       if (!db.users[senderJid]) {
-         db.users[senderJid] = {
-           xp: 0,
-           level: 1,
-           name: pushName,
-           orderCount: 0
-         }
-       }
-       const user = db.users[senderJid]
-       user.name = pushName
-       user.xp += Math.floor(Math.random() * 10) + 5
-       const nextLevelXp = user.level * 100
-       if (user.xp >= nextLevelXp) {
-         user.level++
-         user.xp = 0
-         await reply(sock, from, `🎉 Selamat @${senderNumber}! Kamu naik ke level ${user.level}`, m)
-       }
-       saveDB(config.dbFile, db)
+        // Command Detection Early
+        let prefix = ""
+        const prefixes = db.settings.multiPrefix ? db.settings.prefixes : [config.prefix]
+        for (let p of prefixes) {
+          if (text.startsWith(p)) {
+            prefix = p
+            break
+          }
+        }
 
-       // Group logic (Anti-link, Anti-spam, Mute)
-       if (isGroup) {
+        const isUserCmd = /^(fitur|menu|produk|pay|payment|pembayaran|list|ping|runtime|owner|me|profile|lb|leaderboard|order|myorder|cekorder|cancelorder|s|sticker|listinfo|info|penjelasan|welcome|goodbye|autodelete|antilink|antispam|lock)$/i.test(text.split(/\s+/)[0])
+        
+        if (!prefix && isUserCmd) {
+          prefix = "" // No prefix for these user commands
+        }
+
+      // User System (XP/Level)
+      if (!db.users[senderJid]) {
+        db.users[senderJid] = {
+          xp: 0,
+          level: 1,
+          name: pushName,
+          orderCount: 0
+        }
+      }
+      const user = db.users[senderJid]
+      user.name = pushName
+      user.xp += Math.floor(Math.random() * 10) + 5
+      const nextLevelXp = user.level * 100
+      if (user.xp >= nextLevelXp) {
+        user.level++
+        user.xp = 0
+        await reply(sock, from, `🎉 Selamat @${senderNumber}! Kamu naik ke level ${user.level}`, m)
+      }
+      saveDB(config.dbFile, db)
+
+      // Group logic (Anti-link, Anti-spam, Mute)
+      if (isGroup) {
         const groupSettings = db.groups[from] || {}
         
         // Auto-Responder Simple
-        if (!owner && !text.startsWith(".") && !prefix) {
+        if (!owner && !text.startsWith("#") && !prefix && !isUserCmd) {
           const lowerText = text.toLowerCase()
           if (lowerText.includes("cara order") || lowerText.includes("beli gimana")) {
             return reply(sock, from, "📦 *CARA ORDER:*\n1. Ketik `list` untuk cek produk\n2. Ketik `order Nama,ID,Qty,Alamat` untuk membeli\n3. Lakukan pembayaran via `pay`", m)
@@ -586,21 +614,7 @@ async function startBot() {
 
         if (!text) return
 
-        let prefix = ""
-        const prefixes = db.settings.multiPrefix ? db.settings.prefixes : [config.prefix]
-        for (let p of prefixes) {
-          if (text.startsWith(p)) {
-            prefix = p
-            break
-          }
-        }
-
-        // Trigger "menu" atau "produk" tanpa prefix (tunggal)
-        if (!prefix && /^(fitur|menu|produk|pay|payment|pembayaran|list|ping|runtime|owner|me|profile|lb|leaderboard|order|myorder|cekorder|cancelorder|s|sticker|listinfo|info)$/i.test(text)) {
-          prefix = "" // No prefix needed
-        } else if (!prefix) {
-          return
-        }
+        if (!prefix && !isUserCmd) return
 
         log("RAW:", rawText)
         log("TEXT:", text)
@@ -646,13 +660,24 @@ async function startBot() {
       }
 
       if (cmd === "penjelasan") {
-        const product = args[0]?.toLowerCase()
-        if (!product) return reply(sock, from, "Gunakan: info <nama_produk>", m)
+        const query = args[0]?.toLowerCase()
+        if (!query) return reply(sock, from, "Gunakan: info <nama_produk atau ID>", m)
 
-        const info = db.explanations[product]
-        if (!info) return reply(sock, from, `❌ Penjelasan untuk "${product}" tidak ditemukan.`, m)
+        let info = db.explanations[query]
+        let productName = query
 
-        return reply(sock, from, `ℹ️ *INFO PRODUK: ${product.toUpperCase()}*\n\n${info}`, m)
+        // Jika tidak ketemu berdasarkan nama, coba cari berdasarkan ID
+        if (!info) {
+          const product = db.list.find(p => String(p.id) === query || p.nama.toLowerCase() === query)
+          if (product) {
+            info = db.explanations[product.nama.toLowerCase()]
+            productName = product.nama
+          }
+        }
+
+        if (!info) return reply(sock, from, `❌ Penjelasan untuk "${query}" tidak ditemukan.`, m)
+
+        return reply(sock, from, `ℹ️ *INFO PRODUK: ${productName.toUpperCase()}*\n\n${info}`, m)
       }
 
       if (cmd === "setinfo") {
@@ -1025,39 +1050,34 @@ async function startBot() {
 
         if (sub === "search") {
           const query = args.slice(1).join(" ").trim().toLowerCase()
-          if (!query) return reply(sock, from, "❌ Masukkan kata kunci pencarian", m)
+          if (!query) return reply(sock, from, "❌ Contoh: list search Netflix", m)
 
           const hasil = db.list.filter(item =>
             item.nama.toLowerCase().includes(query) ||
             item.kategori.toLowerCase().includes(query)
           )
 
-          if (!hasil.length) return reply(sock, from, "❌ Produk tidak ditemukan", m)
+          if (!hasil.length) return reply(sock, from, `❌ Produk "${query}" tidak ditemukan`, m)
 
           const textOut = hasil.map(item =>
-            `${item.id}. ${item.nama} - ${item.harga} (Stok: ${item.stock || 0})`
+            `• [${item.id}] ${item.nama} - Rp ${item.harga.toLocaleString("id-ID")}`
           ).join("\n")
 
-          return reply(sock, from, `🔍 HASIL PENCARIAN "${query.toUpperCase()}"\n\n${textOut}`, m)
+          return reply(sock, from, `🔍 HASIL PENCARIAN: "${query.toUpperCase()}"\n\n${textOut}`, m)
         }
 
         if (sub === "kategori") {
           const kategori = args.slice(1).join(" ").trim().toLowerCase()
-
-          if (!kategori) {
-            return reply(sock, from, "❌ Contoh: list kategori AI", m)
-          }
+          if (!kategori) return reply(sock, from, "❌ Contoh: list kategori AI", m)
 
           const hasil = db.list.filter(item =>
             String(item.kategori).toLowerCase() === kategori
           )
 
-          if (!hasil.length) {
-            return reply(sock, from, "❌ Produk kategori itu tidak ditemukan", m)
-          }
+          if (!hasil.length) return reply(sock, from, "❌ Produk kategori itu tidak ditemukan", m)
 
           const textOut = hasil.map(item =>
-            `${item.id}. ${item.nama} - ${item.harga} (Stok: ${item.stock || 0})`
+            `• [${item.id}] ${item.nama} - Rp ${item.harga.toLocaleString("id-ID")}`
           ).join("\n")
 
           return reply(sock, from, `📂 KATEGORI ${kategori.toUpperCase()}\n\n${textOut}`, m)
@@ -1099,7 +1119,6 @@ Ketik: \`order ${pushName},${item.id},1,-\`
         }
 
         if (sub === "add") {
-          if (!owner) return reply(sock, from, "❌ Khusus owner", m)
 
           const raw = args.slice(1).join(" ")
           const data = raw.split("|")
@@ -1228,15 +1247,15 @@ Ketik: \`order ${pushName},${item.id},1,-\`
           `
 🛒 *MENU LIST PRODUK*
 
-• -list show (Lihat semua)
-• -list search <nama>
-• -list kategori <nama>
-• -list info <id> (Detail produk)
+• list show (Lihat semua)
+• list search <nama>
+• list kategori <nama>
+• list info <id> (Detail produk)
 
 👮‍♂️ *ADMIN LIST*
-• -list add Nama|Harga|Kategori|Status|Stock|Deskripsi
-• -list edit ID key=value (nama, harga, kategori, status, stock, deskripsi, ispromo)
-• -list remove ID
+• #list add Nama|Harga|Kategori|Status|Stock|Deskripsi
+• #list edit ID key=value (nama, harga, kategori, status, stock, deskripsi, ispromo)
+• #list remove ID
 `.trim(),
           m
         )
