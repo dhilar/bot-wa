@@ -6,8 +6,14 @@ const {
 } = require("@whiskeysockets/baileys")
 
 const qrcode = require("qrcode-terminal")
-const Jimp = require("jimp")
+let Jimp = require("jimp")
 const fs = require("fs")
+
+// Fix for Jimp version differences (v0.x vs v1.x)
+if (typeof Jimp.read !== "function" && Jimp.Jimp) {
+  Jimp = Jimp.Jimp
+}
+
 const { Sticker, StickerTypes } = require("wa-sticker-formatter")
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys")
 const os = require("os")
