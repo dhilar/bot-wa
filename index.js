@@ -393,15 +393,17 @@ async function startBot() {
 
   sock.ev.on("group-participants.update", async (update) => {
     const { id, participants, action } = update
-    console.log(`[GROUP EVENT] ${action} in ${id} for ${participants.join(", ")}`)
+    
+    // Safety check: ensure participants are strings (JIDs)
+    const jids = participants.map(p => typeof p === "string" ? p : (p.id || p.jid || String(p)))
+    
+    console.log(`[GROUP EVENT] ${action} in ${id} for ${jids.join(", ")}`)
     
     const db = loadDB(config.dbFile)
     const groupSettings = db.groups[id] || {}
     
-    console.log(`[GROUP SETTINGS] Welcome: ${groupSettings.welcome}, Goodbye: ${groupSettings.goodbye}`)
-
     if (action === "add" && groupSettings.welcome) {
-      for (let p of participants) {
+      for (let p of jids) {
         let text = groupSettings.welcomeMsg || `Selamat datang @${p.split("@")[0]} di grup ini!`
         // Replace @user placeholder if exists
         text = text.replace(/@user/g, `@${p.split("@")[0]}`)
@@ -412,7 +414,7 @@ async function startBot() {
     }
 
     if (action === "remove" && groupSettings.goodbye) {
-      for (let p of participants) {
+      for (let p of jids) {
         let text = groupSettings.goodbyeMsg || `Selamat tinggal @${p.split("@")[0]}!`
         // Replace @user placeholder if exists
         text = text.replace(/@user/g, `@${p.split("@")[0]}`)
