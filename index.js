@@ -1651,42 +1651,47 @@ Ketik *cekorder ${id}* untuk melihat status.
           if (stickerText) {
             log("Sticker Text detected:", stickerText)
             try {
-              // Gunakan ImageScript untuk manipulasi gambar & teks (lebih cepat & RAM friendly)
+              // Gunakan ImageScript untuk manipulasi gambar & teks
               const img = await ImageScript.Image.decode(buffer)
               img.contain(512, 512)
               
-              // Tambahkan teks jika ada
+              // Load font secara aman dari library ImageScript
+              let font;
+              const fontPath = path.join(__dirname, "node_modules", "imagescript", "src", "fonts", "inter", "Inter-Bold.ttf")
+              
               try {
-                const fontPath = path.join(__dirname, "node_modules/imagescript/src/fonts/inter/Inter-Bold.ttf")
-                let font;
-                
                 if (fs.existsSync(fontPath)) {
                   log("Loading local font for sticker...")
                   font = await ImageScript.Font.load(fs.readFileSync(fontPath))
                 } else {
                   log("Local font not found, trying remote font...")
-                  const fontResponse = await fetch("https://github.com/google/fonts/raw/main/ofl/inter/Inter-Bold.ttf")
-                  font = await ImageScript.Font.load(new Uint8Array(await fontResponse.arrayBuffer()))
+                  // Pake link raw github biar pasti dapet buffer fontnya
+                  const fontResponse = await fetch("https://raw.githubusercontent.com/google/fonts/main/ofl/inter/Inter-Bold.ttf")
+                  const fontArrayBuffer = await fontResponse.arrayBuffer()
+                  font = await ImageScript.Font.load(new Uint8Array(fontArrayBuffer))
                 }
+              } catch (fErr) {
+                log("Font loading specifically failed:", fErr.message)
+              }
+              
+              if (font) {
+                log("Rendering text on sticker image...")
+                // Render teks shadow (hitam)
+                const shadow = await ImageScript.Image.renderText(font, 64, stickerText, 0x000000ff)
+                img.composite(shadow, (img.width / 2) - (shadow.width / 2) + 2, img.height - shadow.height - 38)
                 
-                if (font) {
-                  log("Rendering text on sticker image...")
-                  // Render teks shadow (hitam)
-                  const shadow = await ImageScript.Image.renderText(font, 64, stickerText, 0x000000ff)
-                  img.composite(shadow, (img.width / 2) - (shadow.width / 2) + 2, img.height - shadow.height - 38)
-                  
-                  // Render teks utama (putih)
-                  const textImg = await ImageScript.Image.renderText(font, 64, stickerText, 0xffffffff)
-                  img.composite(textImg, (img.width / 2) - (textImg.width / 2), img.height - textImg.height - 40)
-                  
-                  buffer = Buffer.from(await img.encode(3))
-                  log("Sticker text rendering successful")
-                }
-              } catch (fontErr) {
-                console.error("Font rendering failed:", fontErr.message)
+                // Render teks utama (putih)
+                const textImg = await ImageScript.Image.renderText(font, 64, stickerText, 0xffffffff)
+                img.composite(textImg, (img.width / 2) - (textImg.width / 2), img.height - textImg.height - 40)
+                
+                const encoded = await img.encode(3)
+                buffer = Buffer.from(encoded)
+                log("Sticker text rendering successful")
+              } else {
+                log("Skipping text rendering because font is missing")
               }
             } catch (e) {
-              console.error("Image processing error (ImageScript):", e)
+              console.error("ImageScript processing error:", e)
               // Fallback ke Jimp (hanya resize)
               try {
                 const image = await Jimp.read(buffer)
