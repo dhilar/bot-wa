@@ -6,14 +6,8 @@ const {
 } = require("@whiskeysockets/baileys")
 
 const qrcode = require("qrcode-terminal")
-let Jimp = require("jimp")
+const { Jimp } = require("jimp")
 const fs = require("fs")
-
-// Fix for Jimp version differences (v0.x vs v1.x)
-if (typeof Jimp.read !== "function" && Jimp.Jimp) {
-  Jimp = Jimp.Jimp
-}
-
 const { Sticker, StickerTypes } = require("wa-sticker-formatter")
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys")
 const os = require("os")
@@ -1650,23 +1644,23 @@ Ketik *cekorder ${id}* untuk melihat status.
             try {
               const image = await Jimp.read(buffer)
               
-              // Resize for standard sticker size if needed
-              image.contain(512, 512)
+              // Resize for standard sticker size if needed (v1.x uses object { w, h })
+              image.contain({ w: 512, h: 512 })
               
-              // Load a better font if possible, or use default
+              // Load font (Jimp v1.x fonts are static on the Jimp class)
               const font = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE)
               const fontBlack = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK)
               
               const textWidth = Jimp.measureText(font, stickerText)
-              const textHeight = Jimp.measureTextHeight(font, stickerText)
+              const textHeight = Jimp.measureTextHeight(font, stickerText, 512)
               
               const x = (image.bitmap.width / 2) - (textWidth / 2)
               const y = image.bitmap.height - textHeight - 40 // Move up a bit from bottom
               
-              // Add shadow/outline for readability
-              image.print(fontBlack, x + 2, y + 2, stickerText)
-              image.print(fontBlack, x - 2, y - 2, stickerText)
-              image.print(font, x, y, stickerText)
+              // Add shadow/outline for readability (v1.x uses object { font, x, y, text })
+              image.print({ font: fontBlack, x: x + 2, y: y + 2, text: stickerText })
+              image.print({ font: fontBlack, x: x - 2, y: y - 2, text: stickerText })
+              image.print({ font: font, x: x, y: y, text: stickerText })
               
               buffer = await image.getBufferAsync(Jimp.MIME_PNG)
             } catch (e) {
