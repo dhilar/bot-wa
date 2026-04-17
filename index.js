@@ -6,8 +6,10 @@ const {
 } = require("@whiskeysockets/baileys")
 
 const qrcode = require("qrcode-terminal")
-const Jimp = require("jimp")
+const { Jimp } = require("jimp")
+const { Image, Font } = require("imagescript")
 const fs = require("fs")
+const path = require("path")
 const { Sticker, StickerTypes } = require("wa-sticker-formatter")
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys")
 const os = require("os")
@@ -1642,29 +1644,40 @@ Ketik *cekorder ${id}* untuk melihat status.
 
           if (stickerText && (msg.message?.imageMessage || msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage)) {
             try {
-              const image = await Jimp.read(buffer)
+              // Gunakan imagescript untuk overlay teks agar lebih cepat dan hemat RAM
+              const img = await Image.decode(buffer)
+              img.contain(512, 512)
               
-              // Resize for standard sticker size (v0.x API)
-              image.contain(512, 512)
+              // Buat font (imagescript menggunakan built-in font atau bisa load)
+              const font = await Font.load(fs.readFileSync(path.join(__dirname, "node_modules/imagescript/src/fonts/inter/Inter-Bold.ttf")))
               
-              // Load font (v0.x uses static constants like Jimp.FONT_SANS_64_WHITE)
-              const font = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE)
-              const fontBlack = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK)
+              // Render teks (shadow)
+              const shadow = await Image.renderText(font, 64, stickerText, 0x000000ff)
+              img.composite(shadow, (img.width / 2) - (shadow.width / 2) + 2, img.height - shadow.height - 38)
               
-              const textWidth = Jimp.measureText(font, stickerText)
-              const textHeight = Jimp.measureTextHeight(font, stickerText, 512)
+              // Render teks (utama)
+              const text = await Image.renderText(font, 64, stickerText, 0xffffffff)
+              img.composite(text, (img.width / 2) - (text.width / 2), img.height - text.height - 40)
               
-              const x = (image.bitmap.width / 2) - (textWidth / 2)
-              const y = image.bitmap.height - textHeight - 40
-              
-              // Add shadow/outline (v0.x API: font, x, y, text)
-              image.print(fontBlack, x + 2, y + 2, stickerText)
-              image.print(fontBlack, x - 2, y - 2, stickerText)
-              image.print(font, x, y, stickerText)
-              
-              buffer = await image.getBufferAsync(Jimp.MIME_PNG)
+              buffer = await img.encode(3) // 3 = PNG
             } catch (e) {
-              console.error("Jimp text overlay error:", e)
+              console.error("ImageScript text overlay error:", e)
+              // Fallback ke Jimp v1 jika imagescript gagal
+              try {
+                const image = await Jimp.read(buffer)
+                image.contain({ w: 512, h: 512 })
+                const font = await Jimp.loadFont(Jimp.fontSans64White)
+                const fontBlack = await Jimp.loadFont(Jimp.fontSans64Black)
+                const textWidth = Jimp.measureText(font, stickerText)
+                const textHeight = Jimp.measureTextHeight(font, stickerText, 512)
+                const x = (image.bitmap.width / 2) - (textWidth / 2)
+                const y = image.bitmap.height - textHeight - 40
+                image.print({ font: fontBlack, x: x + 2, y: y + 2, text: stickerText })
+                image.print({ font: font, x: x, y: y, text: stickerText })
+                buffer = await image.getBuffer("image/png")
+              } catch (jimpErr) {
+                console.error("Jimp fallback error:", jimpErr)
+              }
             }
           }
           
