@@ -1,4 +1,6 @@
+const config = require("../config");
 const { getDB, saveDB } = require("../lib/db");
+const fs = require("fs");
 const { findProduct, findVariant, formatProductCard, formatMenu, getState, clearState } = require("../lib/product");
 const { createOrder, formatInvoice } = require("../lib/order");
 
@@ -49,7 +51,7 @@ module.exports = async (sock, from, m, text, args, isCmd) => {
         await sock.sendMessage(from, { text: invoice }, { quoted: m });
 
         const ownerMsg = `📥 *ORDER MASUK*\n\nID: ${order.id}\nProduk: ${order.productName}\nVarian: ${order.variantName}\nTotal: Rp ${order.total.toLocaleString("id-ID")}\nUser: @${senderJid.split('@')[0]}`;
-        const ownerJids = db.settings?.ownerJids || [];
+        const ownerJids = config.ownerJids || [];
 
         for (const ownerJid of ownerJids) {
             await sock.sendMessage(ownerJid, { text: ownerMsg, mentions: [senderJid] });
@@ -93,7 +95,7 @@ module.exports = async (sock, from, m, text, args, isCmd) => {
                 await sock.sendMessage(from, { text: invoice }, { quoted: m });
 
                 const ownerMsg = `📥 *ORDER MASUK*\n\nID: ${order.id}\nProduk: ${order.productName}\nVarian: ${order.variantName}\nTotal: Rp ${order.total.toLocaleString("id-ID")}\nUser: @${senderJid.split('@')[0]}`;
-                const ownerJids = db.settings?.ownerJids || [];
+                const ownerJids = config.ownerJids || [];
 
                 for (const ownerJid of ownerJids) {
                     await sock.sendMessage(ownerJid, { text: ownerMsg, mentions: [senderJid] });

@@ -34,9 +34,16 @@ module.exports = async (sock, from, m, cmd, args, isOwner) => {
         if (args[0]) {
             orderId = `INV-${args[0]}`;
         } else {
-            const lastOrder = findLastPendingOrder(from);
-            if (lastOrder) {
-                orderId = lastOrder.id;
+            // Cek jika ada last pending order yang dicatat di db
+            const lastIdFromDb = db.lastOrders?.[from];
+            if (lastIdFromDb) {
+                orderId = lastIdFromDb;
+            } else {
+                // Fallback ke pencarian manual
+                const lastOrder = findLastPendingOrder(from);
+                if (lastOrder) {
+                    orderId = lastOrder.id;
+                }
             }
         }
 

@@ -156,10 +156,18 @@ async function startBot() {
         );
 
         // --- TRACK USERS FOR BROADCAST ---
-        if (!db.users) db.users = [];
-        if (!db.users.includes(senderJid)) {
+        if (!Array.isArray(db.users)) db.users = [];
+        if (senderJid && !db.users.includes(senderJid)) {
             db.users.push(senderJid);
             saveDB();
+        }
+
+        // --- UPDATE LAST ORDERS FOR OWNER (AUTO-P) ---
+        if (owner) {
+            if (!db.lastOrders) db.lastOrders = {};
+            // Mencatat nomor invoice terakhir yang masuk agar owner bisa ketik #p tanpa ID
+            const lastPending = [...db.orders].reverse().find(o => o.status === "pending");
+            if (lastPending) db.lastOrders[senderJid] = lastPending.id;
         }
 
         // --- ANTI LINK ---
