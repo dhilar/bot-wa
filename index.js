@@ -138,6 +138,7 @@ async function startBot() {
         if (!m.message) return;
         if (m.key.fromMe) return;
 
+        const db = getDB();
         const from = m.key.remoteJid;
         const isGroup = from.endsWith("@g.us");
         const senderJid = isGroup ? m.key.participant : from;
